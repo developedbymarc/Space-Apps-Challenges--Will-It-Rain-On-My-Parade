@@ -1,0 +1,9 @@
+numpy
+pandas
+matplotlib
+h5netcdf
+bnlearn
+seaborn
+scikit-learn
+streamlit
+plotly
