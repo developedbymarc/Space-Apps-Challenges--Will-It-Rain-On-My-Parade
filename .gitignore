@@ -3,9 +3,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 
-# large dataset
+# 2 year netcdfs
 large/
-large_merra2_data.db
 
 # C extensions
 *.so
