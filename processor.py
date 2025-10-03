@@ -87,6 +87,147 @@ class MERRA2_Processor:
                 print(f"   [WARNING]  Missing FLX files for: {sorted(list(missing_flx))[:5]}...")
         
         return found_files, common_dates
+    
+    def extract_fill_values(self, file_path, variables: list[str]):
+        """Extract fill values from a single netCDF file"""
+        try:
+            with h5netcdf.File(file_path, mode="r") as f:
+                fill_values = {}
+                
+                for var_name in variables:
+                    if var_name not in f.variables:
+                        continue
+                        
+                    var = f.variables[var_name]
+                    fill_value = None
+                    
+                    # Check for fill value attributes
+                    if hasattr(var, 'attrs'):
+                        attrs = var.attrs
+                        for attr_name in ['_FillValue', 'missing_value', 'fill_value']:
+                            if attr_name in attrs:
+                                fill_value = attrs[attr_name]
+                                break
+                    
+                    # Auto-detect if not found
+                    if fill_value is None:
+                        try:
+                            data_sample = var[0] if len(var.shape) > 2 else var[:]
+                            data_flat = data_sample.flatten()
+                            unique_vals = np.unique(data_flat)
+                            large_vals = unique_vals[unique_vals > 1e10]
+                            if len(large_vals) > 0:
+                                fill_value = large_vals[0]
+                        except:
+                            fill_value = 9.999999999e+14  # Default
+                    
+                    fill_values[var_name] = fill_value
+                
+                return fill_values
+                
+        except Exception as e:
+            print(f"⚠️  Error extracting fill values from {file_path}: {e}")
+            return {}
+    
+    def process_single_file(self, file_path, collection_type: str, expected_variables):
+        """
+        Process a single MERRA-2 file (SLV or FLX)
+        Returns cleaned data as pandas DataFrame
+        """
+        try:
+            with h5netcdf.File(file_path, mode="r") as f:
+                print(f"[PROCESSING] {collection_type} file: {file_path.name}")
+                
+                # Get coordinates
+                if 'time' in f.variables:
+                    times = f['time'][:]
+                else:
+                    # Some files might not have time dimension for daily averages
+                    times = [0]  # Placeholder
+                
+                lats = f['lat'][:]
+                lons = f['lon'][:]
+                
+                print(f"   Dimensions: {len(times)} times × {len(lats)} lats × {len(lons)} lons")
+                print(f"   Lat range: {lats.min():.2f} to {lats.max():.2f}")
+                print(f"   Lon range: {lons.min():.2f} to {lons.max():.2f}")
+                
+                # Extract date from filename for timestamp
+                filename = file_path.name
+                import re
+                date_match = re.search(r'(\d{8})', filename)
+                if date_match:
+                    file_date = datetime.strptime(date_match.group(1), '%Y%m%d')
+                else:
+                    file_date = datetime.now()  # Fallback
+                
+                # Process each variable
+                data_records = []
+                
+                for var_name in expected_variables:
+                    if var_name not in f.variables:
+                        print(f"   [WARNING]  Variable {var_name} not found in {collection_type} file")
+                        continue
+                    
+                    var_data = f[var_name][:]
+                    fill_value = self.fill_values.get(var_name, 9.999999999e+14)
+                    
+                    print(f"   📊 Processing {var_name}: shape {var_data.shape}")
+                    
+                    # Handle different data shapes
+                    if len(var_data.shape) == 3:  # (time, lat, lon)
+                        for t_idx in range(var_data.shape[0]):
+                            timestamp = file_date + timedelta(hours=t_idx)  # Assuming hourly
+                            
+                            for lat_idx, lat in enumerate(lats):
+                                for lon_idx, lon in enumerate(lons):
+                                    value = var_data[t_idx, lat_idx, lon_idx]
+                                    
+                                    # Skip fill values
+                                    if abs(value - fill_value) < 1e-6 or np.isnan(value):
+                                        continue
+                                    
+                                    data_records.append({
+                                        'timestamp': timestamp.timestamp(),
+                                        'latitude': float(lat),
+                                        'longitude': float(lon),
+                                        'variable': var_name,
+                                        'value': float(value),
+                                        'collection': collection_type
+                                    })
+                    
+                    elif len(var_data.shape) == 2:  # (lat, lon) - daily average
+                        timestamp = file_date
+                        
+                        for lat_idx, lat in enumerate(lats):
+                            for lon_idx, lon in enumerate(lons):
+                                value = var_data[lat_idx, lon_idx]
+                                
+                                # Skip fill values
+                                if abs(value - fill_value) < 1e-6 or np.isnan(value):
+                                    continue
+                                
+                                data_records.append({
+                                    'timestamp': timestamp.timestamp(),
+                                    'latitude': float(lat),
+                                    'longitude': float(lon),
+                                    'variable': var_name,
+                                    'value': float(value),
+                                    'collection': collection_type
+                                })
+                    
+                    else:
+                        print(f"   [ERROR]  Unexpected shape for {var_name}: {var_data.shape}")
+                        continue
+                
+                df = pd.DataFrame(data_records)
+                print(f"   [SUCCESS] Extracted {len(df):,} valid data points from {collection_type}")
+                
+                return df
+                
+        except Exception as e:
+            print(f"❌ Error processing {file_path}: {e}")
+            return pd.DataFrame()
 
 
 def main():    
