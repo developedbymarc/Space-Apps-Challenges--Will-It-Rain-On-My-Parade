@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# large dataset
+large/
+large_merra2_data.db
+
 # C extensions
 *.so
 
