@@ -7,6 +7,8 @@ import bnlearn as bn
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
+from streamlit_folium import st_folium
+import folium
 
 db_path = "large_merra2_data.db"
 
@@ -344,20 +346,16 @@ def main():
     
     # Location selection
     locations = get_available_locations()
-    
-    if len(locations) == 1:
-        lat = locations.iloc[0]['latitude']
-        lon = locations.iloc[0]['longitude']
-        st.sidebar.info(f"📍 Location: {lat:.4f}°, {lon:.4f}°")
-        st.sidebar.markdown(f"[View on Map](https://www.google.com/maps?q={lat},{lon})")
-    else:
-        location_idx = st.sidebar.selectbox(
-            "Select Location",
-            range(len(locations)),
-            format_func=lambda i: f"{locations.iloc[i]['latitude']:.4f}°, {locations.iloc[i]['longitude']:.4f}°"
-        )
-        lat = locations.iloc[location_idx]['latitude']
-        lon = locations.iloc[location_idx]['longitude']
+
+    lat = 0
+    lon = 0
+    with st.sidebar:
+        mp = folium.Map(location=[0, 0], zoom_start=12)
+        mp.add_child(folium.LatLngPopup())
+        out = st_folium(mp, width=500, height=500)
+        if out and out.get("last_clicked"):
+            lat = out["last_clicked"]["lat"]
+            lon = out["last_clicked"]["lng"]
     
     # Date selection
     min_date, max_date = get_date_range()
