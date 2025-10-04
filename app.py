@@ -202,6 +202,72 @@ def predict_weather(model, evidence):
     return result_df.sort_values('p', ascending=False)
 
 
+def find_best_days_in_range(model, target_date, preferred_condition, evidence, days_range=7, min_date=None, max_date=None):
+    """Find best days within ±days_range that match preferred condition"""
+    results = []
+    
+    for day_offset in range(-days_range, days_range + 1):
+        check_date = target_date + timedelta(days=day_offset)
+        
+        # Check if this date is in historical range
+        if min_date and max_date:
+            is_historical = min_date.date() <= check_date <= max_date.date()
+        else:
+            is_historical = False
+        
+        if is_historical:
+            # Use historical data
+            weather_data = get_weather_data_for_date(check_date)
+            
+            if weather_data is None or weather_data['count'] == 0:
+                continue
+            
+            # Categorize the historical data
+            day_evidence = {
+                'temp_category': categorize_value(weather_data['T2M_Celsius'], 'temperature'),
+                'wind_category': categorize_value(weather_data['wind_speed_10m'], 'wind'),
+                'humidity_category': categorize_value(weather_data['QV2M'], 'humidity')
+            }
+            
+            temp = weather_data['T2M_Celsius']
+            wind = weather_data['wind_speed_10m']
+            humidity = weather_data['QV2M']
+            precip = weather_data['PRECTOT']
+            data_source = 'historical'
+        else:
+            # Use user's preferred conditions for future dates
+            day_evidence = evidence
+            temp = None  # Will be shown as "predicted based on your conditions"
+            wind = None
+            humidity = None
+            precip = None
+            data_source = 'predicted'
+        
+        # Get predictions
+        predictions = predict_weather(model, day_evidence)
+        
+        # Find probability of preferred condition
+        preferred_prob = predictions[predictions['weather_condition'] == preferred_condition]['p'].values
+        
+        if len(preferred_prob) > 0:
+            results.append({
+                'date': check_date,
+                'probability': preferred_prob[0] * 100,
+                'temp': temp,
+                'wind': wind,
+                'humidity': humidity,
+                'precip': precip,
+                'data_source': data_source
+            })
+    
+    # Sort by probability
+    results_df = pd.DataFrame(results)
+    if len(results_df) > 0:
+        results_df = results_df.sort_values('probability', ascending=False)
+    
+    return results_df
+
+
 def create_probability_chart(predictions_df):
     """Create interactive probability bar chart"""
     fig = go.Figure(data=[
