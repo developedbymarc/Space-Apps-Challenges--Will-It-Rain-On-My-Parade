@@ -108,3 +108,59 @@ def load_and_train_model():
     model = bn.parameter_learning.fit(model, df_discretized)
     
     return model, df
+
+@st.cache_data
+def get_available_locations():
+    """Get unique locations from database"""
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT latitude, longitude FROM weather_data"
+    locations = pd.read_sql_query(query, conn)
+    conn.close()
+    return locations
+
+@st.cache_data
+def get_date_range():
+    """Get available date range from database"""
+    conn = sqlite3.connect(db_path)
+    query = "SELECT MIN(timestamp) as min_date, MAX(timestamp) as max_date FROM weather_data"
+    dates = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    min_date = pd.to_datetime(dates.iloc[0]['min_date'], unit='s')
+    max_date = pd.to_datetime(dates.iloc[0]['max_date'], unit='s')
+    
+    return min_date, max_date
+
+# Main App
+def main():
+    # Header
+    st.title("🌤️ Weather Prediction System")
+    st.markdown("### NASA MERRA-2 Dataset - Bayesian Network Predictions")
+    st.markdown("---")
+    
+    # Load model
+    with st.spinner("Loading model... This may take a moment on first run."):
+        model, historical_df = load_and_train_model()
+    
+    # Sidebar - Input Section
+    st.sidebar.header("📍 Input Parameters")
+    
+    # Location selection
+    locations = get_available_locations()
+    
+    if len(locations) == 1:
+        lat = locations.iloc[0]['latitude']
+        lon = locations.iloc[0]['longitude']
+        st.sidebar.info(f"📍 Location: {lat:.4f}°, {lon:.4f}°")
+        st.sidebar.markdown(f"[View on Map](https://www.google.com/maps?q={lat},{lon})")
+    else:
+        location_idx = st.sidebar.selectbox(
+            "Select Location",
+            range(len(locations)),
+            format_func=lambda i: f"{locations.iloc[i]['latitude']:.4f}°, {locations.iloc[i]['longitude']:.4f}°"
+        )
+        lat = locations.iloc[location_idx]['latitude']
+        lon = locations.iloc[location_idx]['longitude']
+    
+    # Date selection
+    min_date, max_date = get_date_range()
