@@ -126,32 +126,32 @@ def get_date_range():
     dates = pd.read_sql_query(query, conn)
     conn.close()
     
-    min_date = pd.to_datetime(dates.iloc[0]['min_date'], unit='s')
-    max_date = pd.to_datetime(dates.iloc[0]['max_date'], unit='s')
+    min_date = pd.to_datetime(dates.iloc[0]['min_date'])
+    max_date = pd.to_datetime(dates.iloc[0]['max_date'])
     
     return min_date, max_date
 
-
-def get_weather_data_for_datetime(target_datetime, tolerance_hours=1):
-    """Get actual weather data for a specific datetime"""
+def get_weather_data_for_date(target_date):
+    """Get average weather data for a specific date"""
     conn = sqlite3.connect(db_path)
     
-    # Convert to Unix timestamp
-    target_ts = int(target_datetime.timestamp())
-    tolerance_seconds = tolerance_hours * 3600
+    # Format date as string for SQL query (YYYY-MM-DD)
+    date_str = target_date.strftime('%Y-%m-%d')
     
     query = f"""
-    SELECT * FROM weather_data
-    WHERE timestamp BETWEEN {target_ts - tolerance_seconds} AND {target_ts + tolerance_seconds}
-    ORDER BY ABS(timestamp - {target_ts})
-    LIMIT 1
+    SELECT AVG(T2M_Celsius) as T2M_Celsius,
+           AVG(QV2M) as QV2M,
+           AVG(wind_speed_10m) as wind_speed_10m,
+           AVG(PRECTOT) as PRECTOT,
+           COUNT(*) as count
+    FROM weather_data
+    WHERE timestamp = '{date_str}'
     """
     
     result = pd.read_sql_query(query, conn)
     conn.close()
     
-    if len(result) > 0:
-        result['timestamp'] = pd.to_datetime(result['timestamp'], unit='s')
+    if result.iloc[0]['count'] > 0:
         return result.iloc[0]
     return None
 
@@ -228,6 +228,38 @@ def create_probability_chart(predictions_df):
     
     return fig
 
+def create_best_days_chart(best_days_df, preferred_condition):
+    """Create chart showing probabilities across date range"""
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=best_days_df['date'],
+        y=best_days_df['probability'],
+        mode='lines+markers',
+        name=f'{preferred_condition.capitalize()} Probability',
+        line=dict(color='#2E86AB', width=3),
+        marker=dict(size=10)
+    ))
+    
+    # Highlight best day
+    best_day = best_days_df.iloc[0]
+    fig.add_trace(go.Scatter(
+        x=[best_day['date']],
+        y=[best_day['probability']],
+        mode='markers',
+        name='Best Day',
+        marker=dict(size=20, color='#F24236', symbol='star')
+    ))
+    
+    fig.update_layout(
+        title=f"Probability of {preferred_condition.capitalize()} Weather (±7 Days)",
+        xaxis_title="Date",
+        yaxis_title="Probability (%)",
+        height=400,
+        hovermode='x unified'
+    )
+    
+    return fig
 
 # Main App
 def main():
@@ -263,49 +295,255 @@ def main():
     # Date selection
     min_date, max_date = get_date_range()
     
-    st.sidebar.markdown("### 📅 Date & Time")
+    st.sidebar.markdown("### 📅 Date Selection")
+    
+    # Allow future dates for prediction
+    today = datetime.now().date()
+    max_future_date = today + timedelta(days=365 * 2)  # Allow 2 years into future
+    
     selected_date = st.sidebar.date_input(
         "Select Date",
-        value=min_date.date(),
+        value=today,
         min_value=min_date.date(),
-        max_value=max_date.date()
+        max_value=max_future_date,
+        help="Select any date - historical data or future predictions"
     )
     
-    selected_time = st.sidebar.time_input(
-        "Select Time",
-        value=datetime.now().time()
-    )
+    # Check if selected date is in historical range
+    is_historical = min_date.date() <= selected_date <= max_date.date()
+    is_future = selected_date > max_date.date()
     
-    target_datetime = datetime.combine(selected_date, selected_time)
+    if is_future:
+        st.sidebar.info(f"🔮 Future prediction mode - {(selected_date - max_date.date()).days} days ahead")
+    elif is_historical:
+        st.sidebar.success(f"📊 Historical data available")
     
-    # Input method selection
+    # Analysis mode
     st.sidebar.markdown("---")
-    input_method = st.sidebar.radio(
-        "Input Method",
-        ["Use Historical Data", "Manual Input"]
+    analysis_mode = st.sidebar.radio(
+        "Analysis Mode",
+        ["Single Day Prediction", "Find Best Day (±7 days)"]
     )
     
-    # Get data based on input method
-    if input_method == "Use Historical Data":
-        weather_data = get_weather_data_for_datetime(target_datetime)
-        
-        if weather_data is not None:
-            st.sidebar.success("✅ Historical data found!")
-            
-            temp = weather_data['T2M_Celsius']
-            wind = weather_data['wind_speed_10m']
-            humidity = weather_data['QV2M']
-            precip = weather_data['PRECTOT']
-            
-        else:
-            st.sidebar.error("[ERROR] No data for this date/time")
-            st.stop()
+    # Weather parameters input
+    st.sidebar.markdown("### 🎛️ Preferred Weather Conditions")
     
-    else:  # Manual Input
-        st.sidebar.markdown("### 🎛️ Weather Parameters")
+    temp = st.sidebar.slider("Temperature (°C)", -20.0, 50.0, 20.0, 0.5)
+    wind = st.sidebar.slider("Wind Speed (m/s)", 0.0, 30.0, 5.0, 0.5)
+    humidity = st.sidebar.slider("Humidity (kg/kg)", 0.0, 0.03, 0.01, 0.001)
+    
+    # Categorize inputs
+    evidence = {
+        'temp_category': categorize_value(temp, 'temperature'),
+        'wind_category': categorize_value(wind, 'wind'),
+        'humidity_category': categorize_value(humidity, 'humidity')
+    }
+    
+    # Get prediction for selected date
+    with st.spinner("Analyzing weather data..."):
+        predictions = predict_weather(model, evidence)
+    
+    most_likely_condition = predictions.iloc[0]['weather_condition']
+    
+    # Main content based on mode
+    if analysis_mode == "Single Day Prediction":
+        col1, col2 = st.columns([2, 1])
         
-        # temporarily hardcoded values for sliders
-        temp = st.sidebar.slider("Temperature (°C)", -20.0, 50.0, 20.0, 0.5)
-        wind = st.sidebar.slider("Wind Speed (m/s)", 0.0, 30.0, 5.0, 0.5)
-        humidity = st.sidebar.slider("Humidity (kg/kg)", 0.0, 0.03, 0.01, 0.001)
-        precip = st.sidebar.slider("Precipitation (mm)", 0.0, 50.0, 0.0, 0.5)
+        with col1:
+            st.header("📊 Prediction Results")
+            st.markdown(f"**Date:** {selected_date.strftime('%Y-%m-%d')}")
+            st.markdown(f"**Location:** {lat:.4f}°, {lon:.4f}°")
+            
+            if is_future:
+                st.warning("🔮 **Future Prediction** - Based on your preferred weather conditions")
+            elif is_historical:
+                st.success("📊 **Historical Data** - Based on actual recorded conditions")
+            
+            # Display input conditions
+            st.markdown("### 🌡️ Preferred Conditions")
+            
+            metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+            
+            with metrics_col1:
+                st.metric("Temperature", f"{temp:.1f}°C", delta=evidence['temp_category'])
+            
+            with metrics_col2:
+                st.metric("Wind Speed", f"{wind:.1f} m/s", delta=evidence['wind_category'])
+            
+            with metrics_col3:
+                st.metric("Humidity", f"{humidity:.4f} kg/kg", delta=evidence['humidity_category'])
+            
+            st.markdown("---")
+            st.markdown("### 🎯 Weather Condition Probabilities")
+            
+            # Display probabilities
+            for idx, row in predictions.iterrows():
+                condition = row['weather_condition']
+                prob = row['p'] * 100
+                
+                # Emoji mapping
+                emoji_map = {
+                    'clear': '☀️',
+                    'hot': '🔥',
+                    'windy': '💨',
+                    'rainy': '🌧️',
+                    'snowy': '❄️',
+                    'freezing': '🥶'
+                }
+                
+                emoji = emoji_map.get(condition, '🌤️')
+                
+                st.markdown(f"**{emoji} {condition.capitalize()}**")
+                st.progress(prob / 100)
+                st.markdown(f"**{prob:.1f}%**")
+                st.markdown("")
+            
+            # Chart
+            fig = create_probability_chart(predictions)
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            st.header("ℹ️ Information")
+            
+            # Most likely condition
+            st.markdown("### 🏆 Most Likely")
+            st.info(f"**{most_likely_condition.capitalize()}**\n\n{predictions.iloc[0]['p']*100:.1f}% probability")
+            
+            if is_future:
+                st.markdown("### 🔮 Prediction Mode")
+                st.markdown("""
+                This is a **future date prediction** based on:
+                - Your preferred weather conditions
+                - Historical weather patterns
+                - Bayesian Network inference
+                
+                The prediction assumes conditions similar to your inputs.
+                """)
+            
+            # Network info
+            st.markdown("### 🧠 Model Info")
+            st.markdown(f"""
+            - **Model Type:** Bayesian Network
+            - **Algorithm:** Hill Climbing
+            - **Edges:** {len(model['model_edges'])}
+            - **Training Data:** {len(historical_df):,} records
+            - **Date Range:** {min_date.date()} to {max_date.date()}
+            """)
+    
+    else:  # Find Best Day mode
+        st.header("🔍 Finding Best Day for Your Preferred Weather")
+        
+        # Select preferred condition
+        preferred_condition = st.selectbox(
+            "What weather condition are you looking for?",
+            options=predictions['weather_condition'].tolist(),
+            index=0,
+            help="Select the weather condition you prefer"
+        )
+        
+        with st.spinner(f"Analyzing ±7 days for best {preferred_condition} weather..."):
+            best_days = find_best_days_in_range(
+                model, 
+                selected_date, 
+                preferred_condition, 
+                evidence,
+                days_range=7,
+                min_date=min_date,
+                max_date=max_date
+            )
+        
+        if len(best_days) > 0:
+            # Best day info
+            best_day = best_days.iloc[0]
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.success(f"### 🏆 Best Day Found!")
+                st.markdown(f"## 📅 {best_day['date'].strftime('%A, %B %d, %Y')}")
+                st.markdown(f"### {best_day['probability']:.1f}% probability of {preferred_condition} weather")
+                
+                # Data source indicator
+                if best_day['data_source'] == 'historical':
+                    st.info("📊 Based on historical weather data")
+                else:
+                    st.warning("🔮 Based on future prediction with your preferred conditions")
+                
+                # Days difference
+                days_diff = (best_day['date'] - selected_date).days
+                if days_diff > 0:
+                    st.info(f"ℹ️ This is {days_diff} days after your selected date")
+                elif days_diff < 0:
+                    st.info(f"ℹ️ This is {abs(days_diff)} days before your selected date")
+                else:
+                    st.info(f"ℹ️ This is your selected date!")
+                
+                # Expected conditions (only show if historical data available)
+                if best_day['data_source'] == 'historical':
+                    st.markdown("### 🌡️ Expected Conditions on Best Day")
+                    
+                    metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
+                    
+                    with metrics_col1:
+                        st.metric("Temperature", f"{best_day['temp']:.1f}°C")
+                    
+                    with metrics_col2:
+                        st.metric("Wind Speed", f"{best_day['wind']:.1f} m/s")
+                    
+                    with metrics_col3:
+                        st.metric("Humidity", f"{best_day['humidity']:.4f}")
+                    
+                    with metrics_col4:
+                        st.metric("Precipitation", f"{best_day['precip']:.2f} mm")
+                else:
+                    st.markdown("### 🌡️ Prediction Based On")
+                    st.markdown(f"""
+                    - Temperature: {temp:.1f}°C ({evidence['temp_category']})
+                    - Wind Speed: {wind:.1f} m/s ({evidence['wind_category']})
+                    - Humidity: {humidity:.4f} kg/kg ({evidence['humidity_category']})
+                    """)
+                
+                # Chart showing all days
+                st.markdown("---")
+                fig = create_best_days_chart(best_days, preferred_condition)
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("### 📋 All Days Ranked")
+                
+                for idx, row in best_days.head(7).iterrows():
+                    date_str = row['date'].strftime('%b %d')
+                    prob = row['probability']
+                    source_emoji = "📊" if row['data_source'] == 'historical' else "🔮"
+                    
+                    # Medal emojis for top 3
+                    if idx == 0:
+                        medal = "🥇"
+                    elif idx == 1:
+                        medal = "🥈"
+                    elif idx == 2:
+                        medal = "🥉"
+                    else:
+                        medal = f"{idx + 1}."
+                    
+                    st.markdown(f"{medal} **{date_str}** {source_emoji} - {prob:.1f}%")
+                    st.progress(prob / 100)
+                    st.markdown("")
+                
+                st.markdown("---")
+                st.markdown("### 💡 Legend")
+                st.markdown("""
+                - 📊 Historical data
+                - 🔮 Future prediction
+                """)
+                st.info("Rankings show highest probability of your preferred weather condition.")
+        
+        else:
+            st.error("No data available for analysis.")
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("**NASA Space Apps Challenge 2025** | Built with Streamlit & bnlearn")
+
+if __name__ == "__main__":
+    main()
