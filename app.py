@@ -155,6 +155,52 @@ def get_weather_data_for_datetime(target_datetime, tolerance_hours=1):
         return result.iloc[0]
     return None
 
+def categorize_value(value, variable):
+    """Convert raw value to category"""
+    if variable == 'temperature':
+        if value < 0: return 'freezing'
+        elif value < 10: return 'cold'
+        elif value < 20: return 'mild'
+        elif value < 30: return 'warm'
+        else: return 'hot'
+    
+    elif variable == 'wind':
+        if value < 2: return 'calm'
+        elif value < 5: return 'light'
+        elif value < 10: return 'moderate'
+        elif value < 15: return 'strong'
+        else: return 'very_strong'
+    
+    elif variable == 'humidity':
+        if value < 0.005: return 'low'
+        elif value < 0.010: return 'moderate'
+        elif value < 0.015: return 'high'
+        else: return 'very_high'
+
+def predict_weather(model, evidence):
+    """Make prediction using Bayesian Network"""
+    # Filter evidence to only include variables in the network
+    network_vars = set()
+    for edge in model['model_edges']:
+        network_vars.add(edge[0])
+        network_vars.add(edge[1])
+    
+    valid_evidence = {k: v for k, v in evidence.items() if k in network_vars}
+    
+    if not valid_evidence:
+        valid_evidence = None
+    
+    # Perform inference
+    query_result = bn.inference.fit(
+        model,
+        variables=['weather_condition'],
+        evidence=valid_evidence,
+        verbose=0
+    )
+    
+    result_df = query_result.df if hasattr(query_result, 'df') else query_result
+    return result_df.sort_values('p', ascending=False)
+
 
 # Main App
 def main():
