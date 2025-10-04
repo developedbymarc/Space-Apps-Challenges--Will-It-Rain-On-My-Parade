@@ -297,38 +297,38 @@ def find_best_days_in_range(model, evidence: dict, target_variables, preferred_c
     target_date = int(evidence['day_category'][-3:])
 
     def day_offsetter(day, offset):
+        """Formula to calculate offsets for the days (days value range: 1 to 365)"""
         return (((day - 1 + offset) % 365) + 365) % 365 + 1
 
-    for day_offset in range(-days_range, days_range + 1):
-        check_date = day_offsetter(target_date, day_offset)
-        check_date = "day_" + f"{check_date}".zfill(3)
+    results = {
+        'probability': [],
+        'day': []
+    }
 
-        # Use user's preferred conditions for future dates
+    for day_offset in range(-days_range, days_range + 1):
+        offset_date = day_offsetter(target_date, day_offset)
+        offset_date = "day_" + f"{offset_date}".zfill(3)
+
         day_evidence = evidence.copy()
-        day_evidence['day_category'] = check_date
-        temp = None  # Will be shown as "predicted based on your conditions"
-        wind = None
-        humidity = None
-        precip = None
+        day_evidence['day_category'] = offset_date
         
         # Get predictions
         predictions = predict_weather(model, day_evidence, target_variables)
         
-        if len(preferred_prob) > 0:
-            results.append({
-                'date': check_date,
-                'probability': preferred_prob[0] * 100,
-                'temp': temp,
-                'wind': wind,
-                'humidity': humidity,
-                'precip': precip
-            })
+        print(results)
+        results['probability'].append(1)
+        results['day'].append(offset_date)
+        for category in preferred_categories:
+            # voodoo magic stuff.. i really donno what the hell i did here but it works. dont touch pls
+            print(preferred_categories[category], predictions[category][predictions[category][category] == preferred_categories[category]])
+            results['probability'][day_offset + days_range] *= predictions[category][predictions[category][category] == preferred_categories[category]]['p'].values[0]
     
     # Sort by probability
     results_df = pd.DataFrame(results)
     if len(results_df) > 0:
         results_df = results_df.sort_values('probability', ascending=False)
     
+    print(results_df)
     return results_df
 
 def create_probability_chart(predictions_df, variable_name):
@@ -358,7 +358,13 @@ def create_probability_chart(predictions_df, variable_name):
     return fig
     
 def categorize_value(value, variable):
-    """Convert raw value to category"""
+    """
+    Convert raw value to category
+
+    ### Params
+    - `value` - raw value
+    - `variable` - 'temp' | 'wind' | 'humidity' | 'prectot' | 'precsno'
+    """
     if variable == 'temp':
         if value < 0: return 'freezing'
         elif value < 10: return 'cold'
@@ -378,18 +384,6 @@ def categorize_value(value, variable):
         elif value < 0.010: return 'moderate'
         elif value < 0.015: return 'high'
         else: return 'very_high'
-
-    # df['precip_category'] = pd.cut(
-    #     df['PRECTOT'],
-    #     bins=[-np.inf, 0.1, 2.5, 10, 50, np.inf],
-    #     labels=['none', 'light', 'moderate', 'heavy', 'very_heavy']
-    # )
-    
-    # df['snow_category'] = pd.cut(
-    #     df['PRECSNO'],
-    #     bins=[-np.inf, 0.01, 1, 5, np.inf],
-    #     labels=['none', 'light', 'moderate', 'heavy']
-    # )
 
     elif variable == 'prectot':
         if value < 0.1: return 'none'
@@ -516,8 +510,6 @@ def main():
     prectot = st.sidebar.slider("Rain (mm/day)", 0.0, 0.03, 0.01, 0.001)
     precsno = st.sidebar.slider("Snow (mm/day)", 0.0, 0.03, 0.01, 0.001)
 
-
-
     # Build evidence dictionary
     evidence = {
         'day_category': categorize_day_of_year(day_of_year, is_leap_year),
@@ -533,13 +525,24 @@ def main():
         'snow_category',
         'humidity_category'
     ]
+
+    # Build preferred_conditions dictionary
+    preferred_categories = {
+        'temp_category': categorize_value(temp, 'temp'),
+        'wind_category': categorize_value(wind, 'wind'),
+        'precip_category': categorize_value(prectot, 'prectot'),
+        'snow_category': categorize_value(precsno, 'precsno'),
+        'humidity_category': categorize_value(humidity, 'humidity')
+    }
+
+    find_best_days_in_range(model, evidence, target_variables, preferred_categories)
     
     # Get predictions
     st.sidebar.markdown("---")
     if st.sidebar.button("🔮 Predict Weather", type="primary"):
         with st.spinner("Analyzing weather patterns..."):
             predictions = predict_weather(model, evidence, target_variables)
-        
+
         if predictions is None:
             st.error("Unable to make predictions. Please check the model structure.")
             return
