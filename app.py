@@ -6,6 +6,8 @@ import bnlearn as bn
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import plotly.express as px
+from streamlit_folium import st_folium
+import folium
 
 db_path = "large_merra2_data.db"
 
@@ -38,7 +40,27 @@ def load_and_train_model():
     # Convert timestamp - already in date format
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     
-    # Engineer features
+    # Extract day of year (1-366)
+    # Normalize leap days: Feb 29 (day 60) becomes Feb 28, and shift all days after
+    df['day_of_year'] = df['timestamp'].dt.dayofyear
+    df['is_leap_year'] = df['timestamp'].dt.is_leap_year
+    
+    # Adjust for leap years: if it's after Feb 29 in a leap year, subtract 1
+    df['day_of_year_normalized'] = df.apply(
+        lambda row: row['day_of_year'] - 1 if row['is_leap_year'] and row['day_of_year'] > 60 else row['day_of_year'],
+        axis=1
+    )
+    
+    # Now we have days 1-365 consistently
+    # Convert to string categories for BN (day_001, day_002, ..., day_365)
+    df['day_category'] = df['day_of_year_normalized'].apply(lambda x: f'day_{int(x):03d}')
+    
+    # Each unique lat/long gets its own bin
+    # Round to 2 decimal places for consistency and convert to string categories
+    df['lat_category'] = df['latitude'].round(2).apply(lambda x: f'lat_{x:.2f}')
+    df['lon_category'] = df['longitude'].round(2).apply(lambda x: f'lon_{x:.2f}')
+    
+    # Engineer weather features
     df['temp_category'] = pd.cut(
         df['T2M_Celsius'], 
         bins=[-np.inf, 0, 10, 20, 30, np.inf],
@@ -69,33 +91,17 @@ def load_and_train_model():
         labels=['low', 'moderate', 'high', 'very_high']
     )
     
-    # Weather condition
-    conditions = []
-    for _, row in df.iterrows():
-        if row['PRECSNO'] > 0.1:
-            condition = 'snowy'
-        elif row['PRECTOT'] > 2.5:
-            condition = 'rainy'
-        elif row['wind_speed_10m'] > 10:
-            condition = 'windy'
-        elif row['T2M_Celsius'] < 0:
-            condition = 'freezing'
-        elif row['T2M_Celsius'] > 30:
-            condition = 'hot'
-        else:
-            condition = 'clear'
-        conditions.append(condition)
-    
-    df['weather_condition'] = conditions
-    
     # Prepare for Bayesian Network
+    # Include location and time as evidence variables
     bn_features = [
+        'day_category',
+        'lat_category',
+        'lon_category',
         'temp_category',
         'wind_category',
         'precip_category',
         'snow_category',
         'humidity_category',
-        'weather_condition'
     ]
     
     df_discretized = df[bn_features].copy().dropna()
@@ -131,54 +137,48 @@ def get_date_range():
     
     return min_date, max_date
 
-def get_weather_data_for_date(target_date):
-    """Get average weather data for a specific date"""
-    conn = sqlite3.connect(db_path)
+def categorize_day_of_year(day_of_year, is_leap_year=False):
+    """Convert day of year to normalized day category (handling leap years)
     
-    # Format date as string for SQL query (YYYY-MM-DD)
-    date_str = target_date.strftime('%Y-%m-%d')
-    
-    query = f"""
-    SELECT AVG(T2M_Celsius) as T2M_Celsius,
-           AVG(QV2M) as QV2M,
-           AVG(wind_speed_10m) as wind_speed_10m,
-           AVG(PRECTOT) as PRECTOT,
-           COUNT(*) as count
-    FROM weather_data
-    WHERE timestamp = '{date_str}'
+    Leap year handling: Feb 29 (day 60) is treated as Feb 28,
+    and all days after are shifted back by 1 to maintain consistency.
+    This gives us 365 consistent day bins across all years.
     """
+    if is_leap_year and day_of_year > 60:
+        day_of_year = day_of_year - 1
     
-    result = pd.read_sql_query(query, conn)
-    conn.close()
+    # Ensure we're in range 1-365
+    day_of_year = max(1, min(365, day_of_year))
     
-    if result.iloc[0]['count'] > 0:
-        return result.iloc[0]
-    return None
+    return f'day_{int(day_of_year):03d}'
 
-def categorize_value(value, variable):
-    """Convert raw value to category"""
-    if variable == 'temperature':
-        if value < 0: return 'freezing'
-        elif value < 10: return 'cold'
-        elif value < 20: return 'mild'
-        elif value < 30: return 'warm'
-        else: return 'hot'
+def categorize_latitude(lat):
+    """Convert latitude to category bin
     
-    elif variable == 'wind':
-        if value < 2: return 'calm'
-        elif value < 5: return 'light'
-        elif value < 10: return 'moderate'
-        elif value < 15: return 'strong'
-        else: return 'very_strong'
-    
-    elif variable == 'humidity':
-        if value < 0.005: return 'low'
-        elif value < 0.010: return 'moderate'
-        elif value < 0.015: return 'high'
-        else: return 'very_high'
+    Each unique latitude value gets its own bin.
+    Rounded to 2 decimal places for consistency.
+    """
+    return f'lat_{lat:.2f}'
 
-def predict_weather(model, evidence):
-    """Make prediction using Bayesian Network"""
+def categorize_longitude(lon):
+    """Convert longitude to category bin
+    
+    Each unique longitude value gets its own bin.
+    Rounded to 2 decimal places for consistency.
+    """
+    return f'lon_{lon:.2f}'
+
+def predict_weather(model, evidence, target_variables):
+    """Make prediction using Bayesian Network
+    
+    Args:
+        model: Trained Bayesian Network
+        evidence: Dictionary of evidence variables (day, lat, lon)
+        target_variables: List of weather variables to predict
+    
+    Returns:
+        Dictionary with predictions for each variable, or error message
+    """
     # Filter evidence to only include variables in the network
     network_vars = set()
     for edge in model['model_edges']:
@@ -188,91 +188,107 @@ def predict_weather(model, evidence):
     valid_evidence = {k: v for k, v in evidence.items() if k in network_vars}
     
     if not valid_evidence:
-        valid_evidence = None
+        return None
     
-    # Perform inference
-    query_result = bn.inference.fit(
-        model,
-        variables=['weather_condition'],
-        evidence=valid_evidence,
-        verbose=0
-    )
+    # Filter target variables to only include those in the network
+    valid_targets = [v for v in target_variables if v in network_vars]
     
-    result_df = query_result.df if hasattr(query_result, 'df') else query_result
-    return result_df.sort_values('p', ascending=False)
+    if not valid_targets:
+        return None
+    
+    # Perform inference for each target variable
+    results = {}
+    try:
+        for target in valid_targets:
+            query_result = bn.inference.fit(
+                model,
+                variables=[target],
+                evidence=valid_evidence,
+                verbose=0
+            )
+            
+            result_df = query_result.df if hasattr(query_result, 'df') else query_result
+            results[target] = result_df.sort_values('p', ascending=False)
+        
+        return results
+    except KeyError as e:
+        # This happens when the evidence combination doesn't exist in training data
+        return {"error": "location_not_in_data", "message": str(e)}
 
-
-def find_best_days_in_range(model, target_date, preferred_condition, evidence, days_range=7, min_date=None, max_date=None):
-    """Find best days within ±days_range that match preferred condition"""
-    results = []
+def create_predictions_dataframe(predictions, evidence, selected_date, lat, lon):
+    """Create a comprehensive DataFrame from predictions for CSV export"""
     
-    for day_offset in range(-days_range, days_range + 1):
-        check_date = target_date + timedelta(days=day_offset)
+    # Create base info
+    export_data = []
+    
+    # Get top prediction for each variable
+    for var_name, pred_df in predictions.items():
+        top_pred = pred_df.iloc[0]
+        top_category = top_pred[var_name]
+        top_prob = top_pred['p']
         
-        # Check if this date is in historical range
-        if min_date and max_date:
-            is_historical = min_date.date() <= check_date <= max_date.date()
-        else:
-            is_historical = False
-        
-        if is_historical:
-            # Use historical data
-            weather_data = get_weather_data_for_date(check_date)
-            
-            if weather_data is None or weather_data['count'] == 0:
-                continue
-            
-            # Categorize the historical data
-            day_evidence = {
-                'temp_category': categorize_value(weather_data['T2M_Celsius'], 'temperature'),
-                'wind_category': categorize_value(weather_data['wind_speed_10m'], 'wind'),
-                'humidity_category': categorize_value(weather_data['QV2M'], 'humidity')
-            }
-            
-            temp = weather_data['T2M_Celsius']
-            wind = weather_data['wind_speed_10m']
-            humidity = weather_data['QV2M']
-            precip = weather_data['PRECTOT']
-            data_source = 'historical'
-        else:
-            # Use user's preferred conditions for future dates
-            day_evidence = evidence
-            temp = None  # Will be shown as "predicted based on your conditions"
-            wind = None
-            humidity = None
-            precip = None
-            data_source = 'predicted'
-        
-        # Get predictions
-        predictions = predict_weather(model, day_evidence)
-        
-        # Find probability of preferred condition
-        preferred_prob = predictions[predictions['weather_condition'] == preferred_condition]['p'].values
-        
-        if len(preferred_prob) > 0:
-            results.append({
-                'date': check_date,
-                'probability': preferred_prob[0] * 100,
-                'temp': temp,
-                'wind': wind,
-                'humidity': humidity,
-                'precip': precip,
-                'data_source': data_source
+        export_data.append({
+            'date': selected_date,
+            'latitude': lat,
+            'longitude': lon,
+            'day_category': evidence['day_category'],
+            'lat_category': evidence['lat_category'],
+            'lon_category': evidence['lon_category'],
+            'variable': var_name,
+            'predicted_category': top_category,
+            'probability': top_prob
+        })
+    
+    df = pd.DataFrame(export_data)
+    
+    # Calculate joint probability (multiply all top predictions)
+    joint_probability = df['probability'].prod()
+    
+    # Add joint probability row
+    joint_row = {
+        'date': selected_date,
+        'latitude': lat,
+        'longitude': lon,
+        'day_category': evidence['day_category'],
+        'lat_category': evidence['lat_category'],
+        'lon_category': evidence['lon_category'],
+        'variable': 'JOINT_PROBABILITY',
+        'predicted_category': 'all_conditions_together',
+        'probability': joint_probability
+    }
+    
+    df = pd.concat([df, pd.DataFrame([joint_row])], ignore_index=True)
+    
+    return df, joint_probability
+
+def create_detailed_predictions_dataframe(predictions, evidence, selected_date, lat, lon):
+    """Create a detailed DataFrame with ALL probabilities for each variable"""
+    
+    export_data = []
+    
+    # Add all predictions for each variable
+    for var_name, pred_df in predictions.items():
+        for idx, row in pred_df.iterrows():
+            export_data.append({
+                'date': selected_date,
+                'latitude': lat,
+                'longitude': lon,
+                'day_category': evidence['day_category'],
+                'lat_category': evidence['lat_category'],
+                'lon_category': evidence['lon_category'],
+                'variable': var_name,
+                'category': row[var_name],
+                'probability': row['p'],
+                'rank': idx + 1
             })
     
-    # Sort by probability
-    results_df = pd.DataFrame(results)
-    if len(results_df) > 0:
-        results_df = results_df.sort_values('probability', ascending=False)
-    
-    return results_df
+    return pd.DataFrame(export_data)
 
-
-def create_probability_chart(predictions_df):
+def create_probability_chart(predictions_df, variable_name):
     """Create interactive probability bar chart"""
     fig = go.Figure(data=[
         go.Bar(
-            x=predictions_df['weather_condition'],
+            x=predictions_df[variable_name],
             y=predictions_df['p'] * 100,
             text=[f"{p:.1f}%" for p in predictions_df['p'] * 100],
             textposition='auto',
@@ -285,44 +301,11 @@ def create_probability_chart(predictions_df):
     ])
     
     fig.update_layout(
-        title="Weather Condition Probabilities",
-        xaxis_title="Weather Condition",
+        title=f"{variable_name.replace('_', ' ').title()} Probabilities",
+        xaxis_title=variable_name.replace('_', ' ').title(),
         yaxis_title="Probability (%)",
-        height=400,
+        height=350,
         yaxis=dict(range=[0, 100])
-    )
-    
-    return fig
-
-def create_best_days_chart(best_days_df, preferred_condition):
-    """Create chart showing probabilities across date range"""
-    fig = go.Figure()
-    
-    fig.add_trace(go.Scatter(
-        x=best_days_df['date'],
-        y=best_days_df['probability'],
-        mode='lines+markers',
-        name=f'{preferred_condition.capitalize()} Probability',
-        line=dict(color='#2E86AB', width=3),
-        marker=dict(size=10)
-    ))
-    
-    # Highlight best day
-    best_day = best_days_df.iloc[0]
-    fig.add_trace(go.Scatter(
-        x=[best_day['date']],
-        y=[best_day['probability']],
-        mode='markers',
-        name='Best Day',
-        marker=dict(size=20, color='#F24236', symbol='star')
-    ))
-    
-    fig.update_layout(
-        title=f"Probability of {preferred_condition.capitalize()} Weather (±7 Days)",
-        xaxis_title="Date",
-        yaxis_title="Probability (%)",
-        height=400,
-        hovermode='x unified'
     )
     
     return fig
@@ -332,6 +315,7 @@ def main():
     # Header
     st.title("🌤️ Weather Prediction System")
     st.markdown("### NASA MERRA-2 Dataset - Bayesian Network Predictions")
+    st.markdown("Predict weather conditions given **location** and **time**")
     st.markdown("---")
     
     # Load model
@@ -341,22 +325,50 @@ def main():
     # Sidebar - Input Section
     st.sidebar.header("📍 Input Parameters")
     
-    # Location selection
+    st.sidebar.markdown("### 🌍 Location")
+    
+    # Get available locations
     locations = get_available_locations()
     
-    if len(locations) == 1:
-        lat = locations.iloc[0]['latitude']
-        lon = locations.iloc[0]['longitude']
-        st.sidebar.info(f"📍 Location: {lat:.4f}°, {lon:.4f}°")
-        st.sidebar.markdown(f"[View on Map](https://www.google.com/maps?q={lat},{lon})")
-    else:
-        location_idx = st.sidebar.selectbox(
-            "Select Location",
-            range(len(locations)),
-            format_func=lambda i: f"{locations.iloc[i]['latitude']:.4f}°, {locations.iloc[i]['longitude']:.4f}°"
-        )
-        lat = locations.iloc[location_idx]['latitude']
-        lon = locations.iloc[location_idx]['longitude']
+    # Dropdown selector for reliable selection
+    location_idx = st.sidebar.selectbox(
+        "Select Location from Database",
+        range(len(locations)),
+        format_func=lambda i: f"{locations.iloc[i]['latitude']:.2f}°, {locations.iloc[i]['longitude']:.2f}°"
+    )
+    
+    lat = locations.iloc[location_idx]['latitude']
+    lon = locations.iloc[location_idx]['longitude']
+    
+    # Display map showing selected location
+    st.sidebar.markdown("**Selected Location:**")
+    
+    # Create folium map centered on selected location
+    m = folium.Map(location=[lat, lon], zoom_start=8)
+    
+    # Add marker for selected location
+    folium.Marker(
+        location=[lat, lon],
+        popup=f"Selected: {lat:.2f}°, {lon:.2f}°",
+        tooltip="Selected Location",
+        icon=folium.Icon(color='red', icon='info-sign')
+    ).add_to(m)
+    
+    # Add all other available locations
+    for idx, row in locations.iterrows():
+        if idx != location_idx:
+            folium.CircleMarker(
+                location=[row['latitude'], row['longitude']],
+                radius=4,
+                color='blue',
+                fill=True,
+                fillColor='lightblue',
+                fillOpacity=0.6,
+                popup=f"Lat: {row['latitude']:.2f}, Lon: {row['longitude']:.2f}"
+            ).add_to(m)
+    
+    # Display map in sidebar
+    st_folium(m, width=300, height=300)
     
     # Date selection
     min_date, max_date = get_date_range()
@@ -372,122 +384,153 @@ def main():
         value=today,
         min_value=min_date.date(),
         max_value=max_future_date,
-        help="Select any date - historical data or future predictions"
+        help="Select any date - predictions based on day of year"
     )
+    
+    # Calculate day of year
+    selected_datetime = datetime(selected_date.year, selected_date.month, selected_date.day)
+    day_of_year = selected_datetime.timetuple().tm_yday
+    is_leap_year = selected_datetime.year % 4 == 0 and (selected_datetime.year % 100 != 0 or selected_datetime.year % 400 == 0)
+    
+    # Show original and normalized day
+    normalized_day = day_of_year - 1 if is_leap_year and day_of_year > 60 else day_of_year
+    
+    if is_leap_year and selected_date.month == 2 and selected_date.day == 29:
+        st.sidebar.info(f"Day of year: {day_of_year} → {normalized_day} (Feb 29 → Feb 28)")
+    elif is_leap_year and day_of_year > 60:
+        st.sidebar.info(f"Day of year: {day_of_year} → {normalized_day} (leap year adjusted)")
+    else:
+        st.sidebar.info(f"Day of year: {day_of_year}")
     
     # Check if selected date is in historical range
     is_historical = min_date.date() <= selected_date <= max_date.date()
     is_future = selected_date > max_date.date()
     
     if is_future:
-        st.sidebar.info(f"🔮 Future prediction mode - {(selected_date - max_date.date()).days} days ahead")
+        st.sidebar.info(f"🔮 Future prediction mode")
     elif is_historical:
-        st.sidebar.success(f"📊 Historical data available")
+        st.sidebar.success(f"📊 Can compare with historical data")
     
-    # Analysis mode
-    st.sidebar.markdown("---")
-    analysis_mode = st.sidebar.radio(
-        "Analysis Mode",
-        ["Single Day Prediction", "Find Best Day (±7 days)"]
-    )
-    
-    # Weather parameters input
-    st.sidebar.markdown("### 🎛️ Preferred Weather Conditions")
-    
-    temp = st.sidebar.slider("Temperature (°C)", -20.0, 50.0, 20.0, 0.5)
-    wind = st.sidebar.slider("Wind Speed (m/s)", 0.0, 30.0, 5.0, 0.5)
-    humidity = st.sidebar.slider("Humidity (kg/kg)", 0.0, 0.03, 0.01, 0.001)
-    
-    # Categorize inputs
+    # Build evidence dictionary
     evidence = {
-        'temp_category': categorize_value(temp, 'temperature'),
-        'wind_category': categorize_value(wind, 'wind'),
-        'humidity_category': categorize_value(humidity, 'humidity')
+        'day_category': categorize_day_of_year(day_of_year, is_leap_year),
+        'lat_category': categorize_latitude(lat),
+        'lon_category': categorize_longitude(lon)
     }
     
-    # Get prediction for selected date
-    with st.spinner("Analyzing weather data..."):
-        predictions = predict_weather(model, evidence)
+    # Define target weather variables to predict
+    target_variables = [
+        'temp_category',
+        'wind_category',
+        'precip_category',
+        'snow_category',
+        'humidity_category'
+    ]
     
-    most_likely_condition = predictions.iloc[0]['weather_condition']
-    
-    # Main content based on mode
-    if analysis_mode == "Single Day Prediction":
+    # Get predictions
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🔮 Predict Weather", type="primary"):
+        with st.spinner("Analyzing weather patterns..."):
+            predictions = predict_weather(model, evidence, target_variables)
+        
+        if predictions is None:
+            st.error("Unable to make predictions. Please check the model structure.")
+            return
+        
+        # Check if there was an error (location not in training data)
+        if isinstance(predictions, dict) and "error" in predictions:
+            st.error("⚠️ No data available for this location")
+            st.warning(f"""
+            **The selected location ({lat:.2f}°, {lon:.2f}°) was not in the training dataset.**
+            
+            Please select one of the blue markers on the map, which represent locations with historical data.
+            
+            Available locations have data from {min_date.date()} to {max_date.date()}.
+            """)
+            return
+        
+        # Create DataFrames for export
+        summary_df, joint_prob = create_predictions_dataframe(predictions, evidence, selected_date, lat, lon)
+        detailed_df = create_detailed_predictions_dataframe(predictions, evidence, selected_date, lat, lon)
+        
+        # Main content
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            st.header("📊 Prediction Results")
-            st.markdown(f"**Date:** {selected_date.strftime('%Y-%m-%d')}")
+            st.header("📊 Weather Predictions")
+            st.markdown(f"**Date:** {selected_date.strftime('%A, %B %d, %Y')} (Day {day_of_year})")
             st.markdown(f"**Location:** {lat:.4f}°, {lon:.4f}°")
             
-            if is_future:
-                st.warning("🔮 **Future Prediction** - Based on your preferred weather conditions")
-            elif is_historical:
-                st.success("📊 **Historical Data** - Based on actual recorded conditions")
-            
-            # Display input conditions
-            st.markdown("### 🌡️ Preferred Conditions")
-            
-            metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
-            
-            with metrics_col1:
-                st.metric("Temperature", f"{temp:.1f}°C", delta=evidence['temp_category'])
-            
-            with metrics_col2:
-                st.metric("Wind Speed", f"{wind:.1f} m/s", delta=evidence['wind_category'])
-            
-            with metrics_col3:
-                st.metric("Humidity", f"{humidity:.4f} kg/kg", delta=evidence['humidity_category'])
+            # Display joint probability prominently
+            st.markdown("---")
+            st.markdown("### 🎲 Joint Probability")
+            st.info(f"**Probability of all top predictions occurring together: {joint_prob*100:.2f}%**")
+            st.caption("This is calculated by multiplying the probabilities of the most likely category for each weather variable.")
             
             st.markdown("---")
-            st.markdown("### 🎯 Weather Condition Probabilities")
+            st.markdown("### 🎯 Predicted Weather Conditions")
+            st.markdown("**Given:** Location and Time of Year")
             
-            # Display probabilities
-            for idx, row in predictions.iterrows():
-                condition = row['weather_condition']
-                prob = row['p'] * 100
+            # Display predictions for each variable
+            for var_name, pred_df in predictions.items():
+                st.markdown(f"#### {var_name.replace('_', ' ').title()}")
+                
+                # Show top prediction
+                top_pred = pred_df.iloc[0]
+                top_category = top_pred[var_name]
+                top_prob = top_pred['p'] * 100
                 
                 # Emoji mapping
                 emoji_map = {
-                    'clear': '☀️',
-                    'hot': '🔥',
-                    'windy': '💨',
-                    'rainy': '🌧️',
-                    'snowy': '❄️',
-                    'freezing': '🥶'
+                    'temp_category': {'freezing': '🥶', 'cold': '❄️', 'mild': '🌤️', 'warm': '☀️', 'hot': '🔥'},
+                    'wind_category': {'calm': '🍃', 'light': '💨', 'moderate': '🌬️', 'strong': '🌪️', 'very_strong': '🌀'},
+                    'precip_category': {'none': '☀️', 'light': '🌦️', 'moderate': '🌧️', 'heavy': '⛈️', 'very_heavy': '🌊'},
+                    'snow_category': {'none': '🌤️', 'light': '🌨️', 'moderate': '❄️', 'heavy': '⛄'},
+                    'humidity_category': {'low': '🏜️', 'moderate': '🌤️', 'high': '💧', 'very_high': '💦'}
                 }
                 
-                emoji = emoji_map.get(condition, '🌤️')
+                emoji = emoji_map.get(var_name, {}).get(top_category, '🌤️')
                 
-                st.markdown(f"**{emoji} {condition.capitalize()}**")
-                st.progress(prob / 100)
-                st.markdown(f"**{prob:.1f}%**")
-                st.markdown("")
-            
-            # Chart
-            fig = create_probability_chart(predictions)
-            st.plotly_chart(fig, use_container_width=True)
+                st.markdown(f"**Most Likely:** {emoji} {top_category.replace('_', ' ').title()} ({top_prob:.1f}%)")
+                
+                # Show all probabilities
+                for idx, row in pred_df.iterrows():
+                    category = row[var_name]
+                    prob = row['p'] * 100
+                    
+                    st.progress(prob / 100, text=f"{category.replace('_', ' ').title()}: {prob:.1f}%")
+                
+                # Chart
+                fig = create_probability_chart(pred_df, var_name)
+                st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("---")
         
         with col2:
-            st.header("ℹ️ Information")
+            st.header("ℹ️ Prediction Info")
             
-            # Most likely condition
-            st.markdown("### 🏆 Most Likely")
-            st.info(f"**{most_likely_condition.capitalize()}**\n\n{predictions.iloc[0]['p']*100:.1f}% probability")
+            # Evidence used
+            st.markdown("### 📌 Given Evidence")
+            st.markdown(f"""
+            - **Day of Year:** {normalized_day} ({selected_date.strftime('%B %d')})
+            - **Latitude:** {lat:.2f}°
+            - **Longitude:** {lon:.2f}°
+            """)
             
-            if is_future:
-                st.markdown("### 🔮 Prediction Mode")
-                st.markdown("""
-                This is a **future date prediction** based on:
-                - Your preferred weather conditions
-                - Historical weather patterns
-                - Bayesian Network inference
-                
-                The prediction assumes conditions similar to your inputs.
-                """)
+            if is_leap_year:
+                st.markdown("**Note:** Leap year adjustment applied for consistency")
+            
+            st.markdown("### 🧠 Model Structure")
+            st.markdown("""
+            The Bayesian Network predicts weather conditions based on:
+            
+            **P(Weather | Day, Latitude, Longitude)**
+            
+            This gives us the probability of specific weather conditions given the location and time of year.
+            """)
             
             # Network info
-            st.markdown("### 🧠 Model Info")
+            st.markdown("### 📊 Model Details")
             st.markdown(f"""
             - **Model Type:** Bayesian Network
             - **Algorithm:** Hill Climbing
@@ -495,117 +538,75 @@ def main():
             - **Training Data:** {len(historical_df):,} records
             - **Date Range:** {min_date.date()} to {max_date.date()}
             """)
-    
-    else:  # Find Best Day mode
-        st.header("🔍 Finding Best Day for Your Preferred Weather")
-        
-        # Select preferred condition
-        preferred_condition = st.selectbox(
-            "What weather condition are you looking for?",
-            options=predictions['weather_condition'].tolist(),
-            index=0,
-            help="Select the weather condition you prefer"
-        )
-        
-        with st.spinner(f"Analyzing ±7 days for best {preferred_condition} weather..."):
-            best_days = find_best_days_in_range(
-                model, 
-                selected_date, 
-                preferred_condition, 
-                evidence,
-                days_range=7,
-                min_date=min_date,
-                max_date=max_date
+            
+            st.markdown("### 🎯 Predicted Variables")
+            st.markdown("""
+            - Temperature Category
+            - Wind Speed Category
+            - Precipitation Category
+            - Snow Category
+            - Humidity Category
+            """)
+            
+            # Download section
+            st.markdown("---")
+            st.markdown("### 📥 Download Predictions")
+            
+            # Summary CSV (top predictions + joint probability)
+            summary_csv = summary_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📄 Download Summary (CSV)",
+                data=summary_csv,
+                file_name=f"weather_predictions_summary_{selected_date.strftime('%Y%m%d')}_lat{lat:.2f}_lon{lon:.2f}.csv",
+                mime="text/csv",
+                help="Download top predictions for each variable plus joint probability"
             )
+            
+            # Detailed CSV (all probabilities)
+            detailed_csv = detailed_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📊 Download Detailed (CSV)",
+                data=detailed_csv,
+                file_name=f"weather_predictions_detailed_{selected_date.strftime('%Y%m%d')}_lat{lat:.2f}_lon{lon:.2f}.csv",
+                mime="text/csv",
+                help="Download all probabilities for all categories"
+            )
+    
+    else:
+        # Initial view
+        st.info("👈 Click **Predict Weather** in the sidebar to get predictions for the selected location and date")
         
-        if len(best_days) > 0:
-            # Best day info
-            best_day = best_days.iloc[0]
-            
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                st.success(f"### 🏆 Best Day Found!")
-                st.markdown(f"## 📅 {best_day['date'].strftime('%A, %B %d, %Y')}")
-                st.markdown(f"### {best_day['probability']:.1f}% probability of {preferred_condition} weather")
-                
-                # Data source indicator
-                if best_day['data_source'] == 'historical':
-                    st.info("📊 Based on historical weather data")
-                else:
-                    st.warning("🔮 Based on future prediction with your preferred conditions")
-                
-                # Days difference
-                days_diff = (best_day['date'] - selected_date).days
-                if days_diff > 0:
-                    st.info(f"ℹ️ This is {days_diff} days after your selected date")
-                elif days_diff < 0:
-                    st.info(f"ℹ️ This is {abs(days_diff)} days before your selected date")
-                else:
-                    st.info(f"ℹ️ This is your selected date!")
-                
-                # Expected conditions (only show if historical data available)
-                if best_day['data_source'] == 'historical':
-                    st.markdown("### 🌡️ Expected Conditions on Best Day")
-                    
-                    metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
-                    
-                    with metrics_col1:
-                        st.metric("Temperature", f"{best_day['temp']:.1f}°C")
-                    
-                    with metrics_col2:
-                        st.metric("Wind Speed", f"{best_day['wind']:.1f} m/s")
-                    
-                    with metrics_col3:
-                        st.metric("Humidity", f"{best_day['humidity']:.4f}")
-                    
-                    with metrics_col4:
-                        st.metric("Precipitation", f"{best_day['precip']:.2f} mm")
-                else:
-                    st.markdown("### 🌡️ Prediction Based On")
-                    st.markdown(f"""
-                    - Temperature: {temp:.1f}°C ({evidence['temp_category']})
-                    - Wind Speed: {wind:.1f} m/s ({evidence['wind_category']})
-                    - Humidity: {humidity:.4f} kg/kg ({evidence['humidity_category']})
-                    """)
-                
-                # Chart showing all days
-                st.markdown("---")
-                fig = create_best_days_chart(best_days, preferred_condition)
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.markdown("### 📋 All Days Ranked")
-                
-                for idx, row in best_days.head(7).iterrows():
-                    date_str = row['date'].strftime('%b %d')
-                    prob = row['probability']
-                    source_emoji = "📊" if row['data_source'] == 'historical' else "🔮"
-                    
-                    # Medal emojis for top 3
-                    if idx == 0:
-                        medal = "🥇"
-                    elif idx == 1:
-                        medal = "🥈"
-                    elif idx == 2:
-                        medal = "🥉"
-                    else:
-                        medal = f"{idx + 1}."
-                    
-                    st.markdown(f"{medal} **{date_str}** {source_emoji} - {prob:.1f}%")
-                    st.progress(prob / 100)
-                    st.markdown("")
-                
-                st.markdown("---")
-                st.markdown("### 💡 Legend")
-                st.markdown("""
-                - 📊 Historical data
-                - 🔮 Future prediction
-                """)
-                st.info("Rankings show highest probability of your preferred weather condition.")
+        st.markdown("### 🧠 How It Works")
+        st.markdown("""
+        This weather prediction system uses a **Bayesian Network** to model relationships between:
         
-        else:
-            st.error("No data available for analysis.")
+        1. **Location** (latitude, longitude)
+        2. **Time** (day of year)
+        3. **Weather Conditions** (temperature, wind, precipitation, snow, humidity)
+        
+        The model calculates: **P(Weather Conditions | Location, Time)**
+        
+        This allows you to predict what weather conditions are most likely for any location and date based on historical patterns.
+        
+        ### 🎲 Joint Probability
+        
+        The system calculates the **joint probability** by multiplying together the probabilities of the most likely category for each weather variable. This gives you the probability that all these conditions occur together.
+        
+        For example:
+        - Temperature: Warm (60%)
+        - Wind: Light (70%)
+        - Precipitation: None (80%)
+        - Snow: None (95%)
+        - Humidity: Moderate (65%)
+        
+        **Joint Probability = 0.60 × 0.70 × 0.80 × 0.95 × 0.65 = 20.8%**
+        """)
+        
+        # Show network structure
+        st.markdown("### 🔗 Network Structure")
+        if len(model['model_edges']) > 0:
+            edges_df = pd.DataFrame(model['model_edges'], columns=['From', 'To'])
+            st.dataframe(edges_df, use_container_width=True)
     
     # Footer
     st.markdown("---")
