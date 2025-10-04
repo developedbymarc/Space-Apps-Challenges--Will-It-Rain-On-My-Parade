@@ -350,7 +350,7 @@ def main():
     lat = 0
     lon = 0
     with st.sidebar:
-        mp = folium.Map(location=[0, 0], zoom_start=12)
+        mp = folium.Map(location=[46.5589, 2.509], zoom_start=6)
         mp.add_child(folium.LatLngPopup())
         out = st_folium(mp, width=500, height=500)
         if out and out.get("last_clicked"):
