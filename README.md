@@ -47,7 +47,7 @@ The "Will It Rain On My Parade?" application is a web-based tool designed to pro
 
 Marc Gulgulian, Levon Jamgossian and Joe Mozian are junior Computer Science (undergraduate) at Haigazian University. Boghos Hamalian has earned his BSc. in Computer Science from Haigazian University in 2024-2025. 
 
-✅ Task tracker
+## ✅ Task tracker
 
 We use this task tracker to keep track of team tasks:
 [Task Tracker](https://app.slack.com/lists/T09FYL0G6AD/F09F520711V)
