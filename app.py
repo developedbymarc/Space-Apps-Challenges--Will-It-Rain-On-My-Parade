@@ -202,6 +202,33 @@ def predict_weather(model, evidence):
     return result_df.sort_values('p', ascending=False)
 
 
+def create_probability_chart(predictions_df):
+    """Create interactive probability bar chart"""
+    fig = go.Figure(data=[
+        go.Bar(
+            x=predictions_df['weather_condition'],
+            y=predictions_df['p'] * 100,
+            text=[f"{p:.1f}%" for p in predictions_df['p'] * 100],
+            textposition='auto',
+            marker=dict(
+                color=predictions_df['p'] * 100,
+                colorscale='RdYlGn',
+                showscale=False
+            )
+        )
+    ])
+    
+    fig.update_layout(
+        title="Weather Condition Probabilities",
+        xaxis_title="Weather Condition",
+        yaxis_title="Probability (%)",
+        height=400,
+        yaxis=dict(range=[0, 100])
+    )
+    
+    return fig
+
+
 # Main App
 def main():
     # Header
