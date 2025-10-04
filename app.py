@@ -131,6 +131,31 @@ def get_date_range():
     
     return min_date, max_date
 
+
+def get_weather_data_for_datetime(target_datetime, tolerance_hours=1):
+    """Get actual weather data for a specific datetime"""
+    conn = sqlite3.connect(db_path)
+    
+    # Convert to Unix timestamp
+    target_ts = int(target_datetime.timestamp())
+    tolerance_seconds = tolerance_hours * 3600
+    
+    query = f"""
+    SELECT * FROM weather_data
+    WHERE timestamp BETWEEN {target_ts - tolerance_seconds} AND {target_ts + tolerance_seconds}
+    ORDER BY ABS(timestamp - {target_ts})
+    LIMIT 1
+    """
+    
+    result = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if len(result) > 0:
+        result['timestamp'] = pd.to_datetime(result['timestamp'], unit='s')
+        return result.iloc[0]
+    return None
+
+
 # Main App
 def main():
     # Header
@@ -164,3 +189,50 @@ def main():
     
     # Date selection
     min_date, max_date = get_date_range()
+    
+    st.sidebar.markdown("### 📅 Date & Time")
+    selected_date = st.sidebar.date_input(
+        "Select Date",
+        value=min_date.date(),
+        min_value=min_date.date(),
+        max_value=max_date.date()
+    )
+    
+    selected_time = st.sidebar.time_input(
+        "Select Time",
+        value=datetime.now().time()
+    )
+    
+    target_datetime = datetime.combine(selected_date, selected_time)
+    
+    # Input method selection
+    st.sidebar.markdown("---")
+    input_method = st.sidebar.radio(
+        "Input Method",
+        ["Use Historical Data", "Manual Input"]
+    )
+    
+    # Get data based on input method
+    if input_method == "Use Historical Data":
+        weather_data = get_weather_data_for_datetime(target_datetime)
+        
+        if weather_data is not None:
+            st.sidebar.success("✅ Historical data found!")
+            
+            temp = weather_data['T2M_Celsius']
+            wind = weather_data['wind_speed_10m']
+            humidity = weather_data['QV2M']
+            precip = weather_data['PRECTOT']
+            
+        else:
+            st.sidebar.error("[ERROR] No data for this date/time")
+            st.stop()
+    
+    else:  # Manual Input
+        st.sidebar.markdown("### 🎛️ Weather Parameters")
+        
+        # temporarily hardcoded values for sliders
+        temp = st.sidebar.slider("Temperature (°C)", -20.0, 50.0, 20.0, 0.5)
+        wind = st.sidebar.slider("Wind Speed (m/s)", 0.0, 30.0, 5.0, 0.5)
+        humidity = st.sidebar.slider("Humidity (kg/kg)", 0.0, 0.03, 0.01, 0.001)
+        precip = st.sidebar.slider("Precipitation (mm)", 0.0, 50.0, 0.0, 0.5)
