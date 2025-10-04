@@ -284,6 +284,53 @@ def create_detailed_predictions_dataframe(predictions, evidence, selected_date, 
     
     return pd.DataFrame(export_data)
 
+def find_best_days_in_range(model, evidence: dict, target_variables, preferred_categories, days_range=7, min_date=None, max_date=None):
+    """Find best days within +/- days_range that match preferred condition"""
+    results = []
+    
+    # evidence = {
+    #     'day_category': categorize_day_of_year(day_of_year, is_leap_year),
+    #     'lat_category': categorize_latitude(lat),
+    #     'lon_category': categorize_longitude(lon)
+    # }
+    # day_category format : day_###, we extract the last 3 digits
+    target_date = int(evidence['day_category'][-3:])
+
+    def day_offsetter(day, offset):
+        return (((day - 1 + offset) % 365) + 365) % 365 + 1
+
+    for day_offset in range(-days_range, days_range + 1):
+        check_date = day_offsetter(target_date, day_offset)
+        check_date = "day_" + f"{check_date}".zfill(3)
+
+        # Use user's preferred conditions for future dates
+        day_evidence = evidence.copy()
+        day_evidence['day_category'] = check_date
+        temp = None  # Will be shown as "predicted based on your conditions"
+        wind = None
+        humidity = None
+        precip = None
+        
+        # Get predictions
+        predictions = predict_weather(model, day_evidence, target_variables)
+        
+        if len(preferred_prob) > 0:
+            results.append({
+                'date': check_date,
+                'probability': preferred_prob[0] * 100,
+                'temp': temp,
+                'wind': wind,
+                'humidity': humidity,
+                'precip': precip
+            })
+    
+    # Sort by probability
+    results_df = pd.DataFrame(results)
+    if len(results_df) > 0:
+        results_df = results_df.sort_values('probability', ascending=False)
+    
+    return results_df
+
 def create_probability_chart(predictions_df, variable_name):
     """Create interactive probability bar chart"""
     fig = go.Figure(data=[
@@ -309,6 +356,54 @@ def create_probability_chart(predictions_df, variable_name):
     )
     
     return fig
+    
+def categorize_value(value, variable):
+    """Convert raw value to category"""
+    if variable == 'temp':
+        if value < 0: return 'freezing'
+        elif value < 10: return 'cold'
+        elif value < 20: return 'mild'
+        elif value < 30: return 'warm'
+        else: return 'hot'
+    
+    elif variable == 'wind':
+        if value < 2: return 'calm'
+        elif value < 5: return 'light'
+        elif value < 10: return 'moderate'
+        elif value < 15: return 'strong'
+        else: return 'very_strong'
+    
+    elif variable == 'humidity':
+        if value < 0.005: return 'low'
+        elif value < 0.010: return 'moderate'
+        elif value < 0.015: return 'high'
+        else: return 'very_high'
+
+    # df['precip_category'] = pd.cut(
+    #     df['PRECTOT'],
+    #     bins=[-np.inf, 0.1, 2.5, 10, 50, np.inf],
+    #     labels=['none', 'light', 'moderate', 'heavy', 'very_heavy']
+    # )
+    
+    # df['snow_category'] = pd.cut(
+    #     df['PRECSNO'],
+    #     bins=[-np.inf, 0.01, 1, 5, np.inf],
+    #     labels=['none', 'light', 'moderate', 'heavy']
+    # )
+
+    elif variable == 'prectot':
+        if value < 0.1: return 'none'
+        elif value < 2.5: return 'light'
+        elif value < 10: return 'moderate'
+        elif value < 50: return 'heavy'
+        else: return 'very_heavy'
+    
+    elif variable == 'precsno':
+        if value < 0.01: return 'none'
+        elif value < 1: return 'light'
+        elif value < 5: return 'moderate'
+        elif value < 25: return 'heavy'
+        else: return 'very_heavy'
 
 # Main App
 def main():
@@ -411,6 +506,18 @@ def main():
     elif is_historical:
         st.sidebar.success(f"📊 Can compare with historical data")
     
+    # Weather parameters input
+    st.sidebar.markdown("### 🎛️ Preferred Weather Conditions")
+
+    # slider (label, min, max, initial values, step)
+    temp = st.sidebar.slider("Temperature (°C)", -20.0, 50.0, 20.0, 0.5)
+    wind = st.sidebar.slider("Wind Speed (m/s)", 0.0, 30.0, 5.0, 0.5)
+    humidity = st.sidebar.slider("Humidity (kg/kg)", 0.0, 0.03, 0.01, 0.001)
+    prectot = st.sidebar.slider("Rain (mm/day)", 0.0, 0.03, 0.01, 0.001)
+    precsno = st.sidebar.slider("Snow (mm/day)", 0.0, 0.03, 0.01, 0.001)
+
+
+
     # Build evidence dictionary
     evidence = {
         'day_category': categorize_day_of_year(day_of_year, is_leap_year),
