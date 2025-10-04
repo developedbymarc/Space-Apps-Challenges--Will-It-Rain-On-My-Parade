@@ -1,3 +1,4 @@
+from io import StringIO
 import streamlit as st
 import sqlite3
 import pandas as pd
@@ -610,6 +611,26 @@ def main():
     # Footer
     st.markdown("---")
     st.markdown("**NASA Space Apps Challenge 2025** | Built with Streamlit & bnlearn")
+
+    if analysis_mode == "Single Day Prediction":
+    # Convert predictions DataFrame to CSV
+        csv = predictions.to_csv(index=False).encode('utf-8')
+        st.sidebar.download_button(
+            label="📥 Download Predictions (CSV)",
+            data=csv,
+            file_name=f"weather_predictions_{selected_date}.csv",
+            mime="text/csv"
+        )
+
+    else:  # Best Day mode
+        if len(best_days) > 0:
+            csv = best_days.to_csv(index=False).encode('utf-8')
+            st.sidebar.download_button(
+                label="📥 Download Best Days Data (CSV)",
+                data=csv,
+                file_name=f"best_days_{selected_date}.csv",
+                mime="text/csv"
+        )
 
 if __name__ == "__main__":
     main()
