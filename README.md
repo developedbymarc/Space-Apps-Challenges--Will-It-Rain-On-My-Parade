@@ -1,3 +1,157 @@
+# How to run the app
+
+## Prerequisites
+
+- Python 3.12
+- Git
+- At least 4GB RAM available
+
+## Installation
+
+### 1. Clone the Repository
+
+```
+git clone https://github.com/YOUR_USERNAME/space-apps-challenges--will-it-rain-on-my-parade.git;
+
+cd space-apps-challenges--will-it-rain-on-my-parade;
+```
+
+### 2. Create Virtual Environment
+
+*Windows:*
+
+```
+python -m venv venv;
+
+venv\Scripts\activate;
+```
+
+*macOS/Linux:*
+
+```
+python3 -m venv venv;
+
+source venv/bin/activate;
+```
+
+### 3. Install Dependencies
+
+```
+pip install --upgrade pip
+
+pip install -r requirements.txt
+```
+
+If you don't have a `requirements.txt`, create one with:
+
+```
+streamlit
+pandas
+numpy
+bnlearn
+plotly
+streamlit-folium
+folium
+google-generativeai
+```
+
+### 4. Set Up Google Gemini API Key (Optional - for AI summaries)
+
+1. Get a free API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+
+2. Create .streamlit/secrets.toml in your project root:
+   bash
+   mkdir .streamlit
+   
+
+3. Add your API key to .streamlit/secrets.toml:
+   toml
+   GEMINI_API_KEY = "your-api-key-here"
+   
+
+4. Make sure .streamlit/secrets.toml is in your .gitignore:
+   
+   .streamlit/secrets.toml
+   venv/
+   __pycache__/
+   *.pyc
+   .DS_Store
+   
+
+### 5. Verify Database File
+
+Make sure `large_merra2_data.db` is in your project root directory. The app will crash if this file is missing.
+
+## Running the App
+
+### Start the Streamlit Server
+
+```
+python -m streamlit run app.py
+```
+
+The app will automatically open in your browser.
+
+If it doesn't open automatically, navigate to the URL shown in your terminal (usually http://localhost:8501).
+
+### First Run
+
+- *First startup will take 1-2 minutes* while the Bayesian Network trains on the data
+- Subsequent runs will be faster due to caching
+
+## Usage
+
+1. *Select Location*: Choose from available locations in the database
+2. *Select Date*: Pick any date (predictions based on seasonal patterns)
+3. *Set Preferences*: Choose your preferred weather conditions
+4. *Adjust Search Range*: Set how many days to search for best matches
+5. *Click "Predict Weather"*: Generate predictions and view results
+
+## Features
+
+- Single-day weather predictions with probability distributions
+- Best days finder for your preferred conditions
+- Interactive visualizations and charts
+- AI-generated weather summaries (requires API key)
+- CSV export of predictions
+
+## Troubleshooting
+
+### "Unable to make predictions" Error
+- The selected location may not be in the training data
+- Try selecting a different location from the dropdown
+
+### App is Slow
+- First run trains the model and takes time
+- Large date ranges in multi-day mode take longer to compute
+- Try reducing the search range slider
+
+### Missing Database Error
+- Ensure large_merra2_data.db is in the project root
+- File size should be around 40MB
+
+### Import Errors
+- Make sure your virtual environment is activated
+- Reinstall dependencies: pip install -r requirements.txt
+
+### API Key Not Working
+- Check that .streamlit/secrets.toml exists and contains your key
+- Verify the key is valid at Google AI Studio
+- The app will work without the API key (AI summary feature won't work)
+
+## Project Structure
+
+```
+project/
+├── app.py                      # Main application
+├── large_merra2_data.db        # Weather data (40MB)
+├── requirements.txt            # Python dependencies
+├── .streamlit/
+│   └── secrets.toml           # API keys (gitignored)
+├── .gitignore
+└── README.md
+```
+
 # Cloud 67 Team Members
 
 - Marc Gulgulian (developedbymarc)
@@ -22,7 +176,6 @@ The "Will It Rain On My Parade?" application is a web-based tool designed to pro
 * User Interface Development: We utilize Streamlit to create a frontend dashboard where users can input a target date and location alongside their desired weather conditions.
 * Probability Computation: We calculate the likelihood of the specified conditions for the given date and location using the Bayesian model and present the results in an easy-to-understand format.
 * Alternative Date Suggestions: If the probability is below a specified threshold, the application will analyze nearby dates and suggest alternatives that are closer to the desired weather criteria.
-* Multi-Day Event Support: We allow users to select date ranges for events and provide suggestions for these periods, enhancing functionality for more complex planning scenarios.
 * AI-powered comprehensive summary of the computed probabilities
 
 ## 🎯 Goals
@@ -31,14 +184,11 @@ The "Will It Rain On My Parade?" application is a web-based tool designed to pro
 2. Build and fit a probabilistic model (Bayesian Network) with the cleaned data
 3. Provide a user-friendly interface where the user can input their desired weather conditions for a given day of the year and return its computed probability
 4. Suggest days closer to the desired weather conditions in a time window around the initial desired date
-5. Allow the user to select date ranges for multi-day events
-6. Suggest a date range closer to the desired weather conditions in a time window around the initial desired date range
-7. AI-powered comprehensive summary of the computed probabilities
+5. AI-powered comprehensive summary of the computed probabilities
 
 ### ✨ Uniqueness
 
-We suggest days closer to the desired weather conditions in a time window around the initial desired date if it happens that the desired conditions weren't met on the initial date. Additionally, we allow the user to select date ranges for multi-day events. Finally, similar to the first point, we also suggest a date range closer to the desired weather conditions in a time window around the initial desired date range.
-
+We suggest days closer to the desired weather conditions in a time window around the initial desired date if it happens that the desired conditions weren't met on the initial date. Additionally, we give comprehensive and user-friendly AI summaries of the computed probabilities.
 
 ## 👥 Team
 
