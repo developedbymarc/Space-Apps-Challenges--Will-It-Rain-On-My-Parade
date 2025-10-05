@@ -211,3 +211,6 @@ __marimo__/
 
 #streamlit gemini api key
 .streamlit/secrets.toml
+
+.DS_Store
+
