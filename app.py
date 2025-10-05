@@ -647,6 +647,8 @@ def main():
                 st.metric("Rain", rain_category.replace('_', ' ').title())
             with pref_cols[4]:
                 st.metric("Snow", snow_category.replace('_', ' ').title())
+
+            ai_summary_placeholder = st.empty()
             
             st.markdown("---")
             st.markdown("### 📅 Top 5 Best Days")
@@ -793,23 +795,25 @@ def main():
             st.markdown("---")
             st.markdown("### 🎯 Predicted Weather Conditions")
             st.markdown("**Given:** Location and Time of Year")
-
+            
             # AI Summary
-            st.markdown("### 🤖 AI Weather Summary")
-            with st.spinner("Generating friendly summary..."):
-                summary = generate_weather_summary(
-                    predictions,
-                    joint_prob,
-                    list(predictions['temp_category']['temp_category'])[0],
-                    list(predictions['wind_category']['wind_category'])[0],
-                    list(predictions['precip_category']['precip_category'])[0],
-                    list(predictions['snow_category']['snow_category'])[0],
-                    list(predictions['humidity_category']['humidity_category'])[0],
-                    f"{lat:.2f}°, {lon:.2f}°",
-                    selected_date.strftime('%A, %B %d, %Y')
-                )
-            st.info(summary)
-            st.markdown("---")
+            with ai_summary_placeholder.container():
+                st.markdown("---")
+                st.markdown("### 🤖 AI Weather Summary")
+                with st.spinner("Generating friendly summary..."):
+                    summary = generate_weather_summary(
+                        predictions,
+                        joint_prob,
+                        list(predictions['temp_category']['temp_category'])[0],
+                        list(predictions['wind_category']['wind_category'])[0],
+                        list(predictions['precip_category']['precip_category'])[0],
+                        list(predictions['snow_category']['snow_category'])[0],
+                        list(predictions['humidity_category']['humidity_category'])[0],
+                        f"{lat:.2f}°, {lon:.2f}°",
+                        selected_date.strftime('%A, %B %d, %Y')
+                    )
+
+                st.info(f"#### {summary}")
                 
             # Display predictions for each variable
             for var_name, pred_df in predictions.items():
