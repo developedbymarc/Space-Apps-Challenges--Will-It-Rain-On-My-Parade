@@ -8,6 +8,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from streamlit_folium import st_folium
 import folium
+import google.generativeai as genai
 
 db_path = "large_merra2_data.db"
 
@@ -415,6 +416,32 @@ def categorize_value(value, variable):
         elif value < 25: return 'heavy'
         else: return 'very_heavy'
 
+
+def generate_weather_summary(predictions, joint_prob, temp_cat, wind_cat, precip_cat, snow_cat, humidity_cat, location, date):
+    """Generate friendly weather summary using Gemini API"""
+    try:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        
+        prompt = f"""You are a friendly weather assistant. Create a brief, conversational summary (2-3 sentences) of this weather prediction:
+
+Date: {date}
+Location: {location}
+
+Predicted conditions:
+- Temperature: {temp_cat}
+- Wind: {wind_cat}
+- Precipitation: {precip_cat}
+- Snow: {snow_cat}
+- Humidity: {humidity_cat}
+- Overall confidence: {joint_prob:.1f}%
+
+Make it sound natural and helpful, like talking to a friend about the weather."""
+        
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Unable to generate summary: {str(e)}"
 # Main App
 def main():
     # Header
@@ -766,7 +793,24 @@ def main():
             st.markdown("---")
             st.markdown("### 🎯 Predicted Weather Conditions")
             st.markdown("**Given:** Location and Time of Year")
-            
+
+            # AI Summary
+            st.markdown("### 🤖 AI Weather Summary")
+            with st.spinner("Generating friendly summary..."):
+                summary = generate_weather_summary(
+                    predictions,
+                    joint_prob,
+                    list(predictions['temp_category']['temp_category'])[0],
+                    list(predictions['wind_category']['wind_category'])[0],
+                    list(predictions['precip_category']['precip_category'])[0],
+                    list(predictions['snow_category']['snow_category'])[0],
+                    list(predictions['humidity_category']['humidity_category'])[0],
+                    f"{lat:.2f}°, {lon:.2f}°",
+                    selected_date.strftime('%A, %B %d, %Y')
+                )
+            st.info(summary)
+            st.markdown("---")
+                
             # Display predictions for each variable
             for var_name, pred_df in predictions.items():
                 st.markdown(f"#### {var_name.replace('_', ' ').title()}")
