@@ -136,7 +136,7 @@ project/
 ├── large_merra2_data.db        # Weather data (40MB)
 ├── requirements.txt            # Python dependencies
 ├── .streamlit/
-│   └── secrets.toml           # API keys (gitignored)
+│   └── secrets.toml           # API keys
 ├── .gitignore
 └── README.md
 ```
