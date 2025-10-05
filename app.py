@@ -503,12 +503,17 @@ def main():
     # Weather parameters input
     st.sidebar.markdown("### 🎛️ Preferred Weather Conditions")
 
+    temp_category = st.sidebar.selectbox("Temperature Category", ['freezing', 'cold', 'mild', 'warm', 'hot'])
+    wind_category = st.sidebar.selectbox("Windspeed Category", ['calm', 'light', 'moderate', 'strong', 'very_strong'])
+    humd_category = st.sidebar.selectbox("Humidity Category", ['low', 'moderate', 'high', 'very_high'])
+    rain_category = st.sidebar.selectbox("Rain Category", ['none', 'light', 'moderate', 'heavy', 'very_heavy'])
+    snow_category = st.sidebar.selectbox("Snow Category", ['none', 'light', 'moderate', 'heavy'])
     # slider (label, min, max, initial values, step)
-    temp = st.sidebar.slider("Temperature (°C)", -20.0, 50.0, 20.0, 0.5)
-    wind = st.sidebar.slider("Wind Speed (m/s)", 0.0, 30.0, 5.0, 0.5)
-    humidity = st.sidebar.slider("Humidity (kg/kg)", 0.0, 0.03, 0.01, 0.001)
-    prectot = st.sidebar.slider("Rain (mm/day)", 0.0, 0.03, 0.01, 0.001)
-    precsno = st.sidebar.slider("Snow (mm/day)", 0.0, 0.03, 0.01, 0.001)
+    # temp = st.sidebar.slider("Temperature (°C)", -20.0, 50.0, 20.0, 0.5)
+    # wind = st.sidebar.slider("Wind Speed (m/s)", 0.0, 30.0, 5.0, 0.5)
+    # humidity = st.sidebar.slider("Humidity (kg/kg)", 0.0, 0.03, 0.01, 0.001)
+    # prectot = st.sidebar.slider("Rain (mm/day)", 0.0, 0.03, 0.01, 0.001)
+    # precsno = st.sidebar.slider("Snow (mm/day)", 0.0, 0.03, 0.01, 0.001)
 
     # Build evidence dictionary
     evidence = {
@@ -528,11 +533,11 @@ def main():
 
     # Build preferred_conditions dictionary
     preferred_categories = {
-        'temp_category': categorize_value(temp, 'temp'),
-        'wind_category': categorize_value(wind, 'wind'),
-        'precip_category': categorize_value(prectot, 'prectot'),
-        'snow_category': categorize_value(precsno, 'precsno'),
-        'humidity_category': categorize_value(humidity, 'humidity')
+        'temp_category': temp_category,
+        'wind_category': wind_category,
+        'precip_category': rain_category,
+        'snow_category': snow_category,
+        'humidity_category': humd_category
     }
 
     find_best_days_in_range(model, evidence, target_variables, preferred_categories)
