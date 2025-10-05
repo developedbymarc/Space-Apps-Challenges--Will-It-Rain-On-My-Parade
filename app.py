@@ -442,6 +442,97 @@ Make it sound natural and helpful, like talking to a friend about the weather.""
         return response.text
     except Exception as e:
         return f"Unable to generate summary: {str(e)}"
+    
+
+def predict_multiday_weather(model, start_date, end_date, lat, lon, target_variables, preferred_categories):
+    """
+    Calculate probability of preferred weather conditions occurring across multiple days
+    
+    ### Params
+        - `model`: Trained Bayesian Network
+        - `start_date`: datetime.date object for start
+        - `end_date`: datetime.date object for end
+        - `lat`: latitude
+        - `lon`: longitude
+        - `target_variables`: list of weather variables to predict
+        - `preferred_categories`: dict of preferred categories for each variable
+    
+    Returns:
+        Dictionary with daily predictions and cumulative probability
+    """
+    current_date = start_date
+    daily_results = []
+    cumulative_probability = 1.0
+    
+    while current_date <= end_date:
+        # Calculate day of year
+        year = current_date.year
+        day_of_year = datetime(year, current_date.month, current_date.day).timetuple().tm_yday
+        is_leap_year = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+        
+        # Build evidence for this day
+        evidence = {
+            'day_category': categorize_day_of_year(day_of_year, is_leap_year),
+            'lat_category': categorize_latitude(lat),
+            'lon_category': categorize_longitude(lon)
+        }
+        
+        # Get predictions for this day
+        predictions = predict_weather(model, evidence, target_variables)
+        
+        if predictions is None or isinstance(predictions, dict) and "error" in predictions:
+            return {"error": "prediction_failed", "date": current_date}
+        
+        # Calculate match probability for this day
+        day_probability = 1.0
+        day_predictions = {}
+        
+        for category in preferred_categories:
+            preferred_value = preferred_categories[category]
+            pred_df = predictions[category]
+            
+            # Get probability of preferred category
+            matching_rows = pred_df[pred_df[category] == preferred_value]
+            if len(matching_rows) > 0:
+                prob = matching_rows['p'].values[0]
+                day_probability *= prob
+                day_predictions[category] = {
+                    'preferred': preferred_value,
+                    'probability': prob,
+                    'top_prediction': pred_df.iloc[0][category],
+                    'top_probability': pred_df.iloc[0]['p']
+                }
+            else:
+                # Preferred category not possible on this day
+                day_probability = 0
+                day_predictions[category] = {
+                    'preferred': preferred_value,
+                    'probability': 0,
+                    'top_prediction': pred_df.iloc[0][category],
+                    'top_probability': pred_df.iloc[0]['p']
+                }
+        
+        daily_results.append({
+            'date': current_date,
+            'day_probability': day_probability,
+            'predictions': day_predictions
+        })
+        
+        # Update cumulative probability (product of all days)
+        cumulative_probability *= day_probability
+        
+        # Move to next day
+        current_date += timedelta(days=1)
+    
+    return {
+        'daily_results': daily_results,
+        'cumulative_probability': cumulative_probability,
+        'num_days': len(daily_results),
+        'start_date': start_date,
+        'end_date': end_date
+    }
+
+
 # Main App
 def main():
     # Header
