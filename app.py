@@ -11,6 +11,22 @@ import folium
 
 db_path = "large_merra2_data.db"
 
+def day_to_date(day_str, year=2024):
+    """Convert day_### string to actual date
+    
+    Args:
+        day_str: String in format 'day_###' where ### is day of year (1-365)
+        year: Year to use for the date (default: 2024)
+    
+    Returns:
+        datetime object representing that day
+    """
+    day_num = int(day_str.split('_')[1])
+    # Start from Jan 1 and add days
+    base_date = datetime(year, 1, 1)
+    target_date = base_date + timedelta(days=day_num - 1)
+    return target_date
+
 # Page configuration
 st.set_page_config(
     page_title="Weather Prediction - NASA MERRA-2",
@@ -508,12 +524,6 @@ def main():
     humd_category = st.sidebar.selectbox("Humidity Category", ['low', 'moderate', 'high', 'very_high'])
     rain_category = st.sidebar.selectbox("Rain Category", ['none', 'light', 'moderate', 'heavy', 'very_heavy'])
     snow_category = st.sidebar.selectbox("Snow Category", ['none', 'light', 'moderate', 'heavy'])
-    # slider (label, min, max, initial values, step)
-    # temp = st.sidebar.slider("Temperature (°C)", -20.0, 50.0, 20.0, 0.5)
-    # wind = st.sidebar.slider("Wind Speed (m/s)", 0.0, 30.0, 5.0, 0.5)
-    # humidity = st.sidebar.slider("Humidity (kg/kg)", 0.0, 0.03, 0.01, 0.001)
-    # prectot = st.sidebar.slider("Rain (mm/day)", 0.0, 0.03, 0.01, 0.001)
-    # precsno = st.sidebar.slider("Snow (mm/day)", 0.0, 0.03, 0.01, 0.001)
 
     # Build evidence dictionary
     evidence = {
@@ -540,7 +550,15 @@ def main():
         'humidity_category': humd_category
     }
 
-    find_best_days_in_range(model, evidence, target_variables, preferred_categories)
+    # Best days search range
+    st.sidebar.markdown("### 🔍 Best Days Search")
+    days_range = st.sidebar.slider(
+        "Search Range (± days)", 
+        min_value=1, 
+        max_value=30, 
+        value=7,
+        help="Search for best days within this range of the selected date"
+    )
     
     # Get predictions
     st.sidebar.markdown("---")
@@ -568,6 +586,169 @@ def main():
         summary_df, joint_prob = create_predictions_dataframe(predictions, evidence, selected_date, lat, lon)
         detailed_df = create_detailed_predictions_dataframe(predictions, evidence, selected_date, lat, lon)
         
+        # Find best days (automatically run this)
+        with st.spinner("Finding best days for your preferred conditions..."):
+            best_days_df = find_best_days_in_range(
+                model, 
+                evidence, 
+                target_variables, 
+                preferred_categories,
+                days_range=days_range
+            )
+        
+        # ===== DISPLAY BEST DAYS SECTION =====
+        st.header("🏆 Best Days for Your Preferred Conditions")
+        
+        st.markdown(f"""
+        **Searching around:** {selected_date.strftime('%B %d, %Y')}  
+        **Range:** ± {days_range} days  
+        **Location:** {lat:.2f}°, {lon:.2f}°
+        """)
+        
+        if best_days_df is not None and len(best_days_df) > 0:
+            # Show preferred conditions at the top
+            st.markdown("### 🎯 Your Preferred Conditions")
+            pref_cols = st.columns(5)
+            
+            with pref_cols[0]:
+                st.metric("Temperature", temp_category.replace('_', ' ').title())
+            with pref_cols[1]:
+                st.metric("Wind", wind_category.replace('_', ' ').title())
+            with pref_cols[2]:
+                st.metric("Humidity", humd_category.replace('_', ' ').title())
+            with pref_cols[3]:
+                st.metric("Rain", rain_category.replace('_', ' ').title())
+            with pref_cols[4]:
+                st.metric("Snow", snow_category.replace('_', ' ').title())
+            
+            st.markdown("---")
+            st.markdown("### 📅 Top 5 Best Days")
+            
+            # Display top 5 results
+            top_5 = best_days_df.head(5)
+            
+            for idx, row in top_5.iterrows():
+                day_str = row['day']
+                prob = row['probability'] * 100
+                
+                # Convert day_### to actual date
+                actual_date = day_to_date(day_str, selected_date.year)
+                
+                # Calculate days difference
+                days_diff = (actual_date.date() - selected_date).days
+                
+                # Create color coding based on probability
+                if prob >= 50:
+                    color = "🟢"
+                elif prob >= 30:
+                    color = "🟡"
+                elif prob >= 10:
+                    color = "🟠"
+                else:
+                    color = "🔴"
+                
+                # Highlight if it's the selected day
+                is_selected = days_diff == 0
+                
+                # Display result
+                with st.container():
+                    col1, col2, col3 = st.columns([3, 1, 1])
+                    
+                    with col1:
+                        date_str = actual_date.strftime('%A, %B %d, %Y')
+                        if is_selected:
+                            st.markdown(f"### {color} {date_str} ⭐ **SELECTED**")
+                        else:
+                            st.markdown(f"### {color} {date_str}")
+                    
+                    with col2:
+                        if days_diff == 0:
+                            st.markdown("**Today's Date**")
+                        elif days_diff > 0:
+                            st.markdown(f"**+{days_diff} days**")
+                        else:
+                            st.markdown(f"**{days_diff} days**")
+                    
+                    with col3:
+                        st.metric("Match", f"{prob:.1f}%")
+                    
+                    st.progress(prob / 100)
+                    st.markdown("---")
+            
+            # Show visualization
+            st.markdown("### 📈 Probability Timeline")
+            
+            # Create timeline chart
+            chart_df = best_days_df.copy()
+            chart_df['date'] = chart_df['day'].apply(lambda x: day_to_date(x, selected_date.year))
+            chart_df['probability_pct'] = chart_df['probability'] * 100
+            
+            # Sort by date to ensure proper line plotting
+            chart_df = chart_df.sort_values('date').reset_index(drop=True)
+            
+            # Mark which row is the selected date
+            selected_dt = datetime(selected_date.year, selected_date.month, selected_date.day)
+            chart_df['is_selected'] = chart_df['date'].apply(lambda x: x.date() == selected_date)
+            
+            fig = px.line(
+                chart_df, 
+                x='date', 
+                y='probability_pct',
+                markers=True,
+                title="Match Probability Over Time"
+            )
+            
+            # Add a red marker for the selected date
+            selected_row = chart_df[chart_df['is_selected']]
+            if not selected_row.empty:
+                fig.add_scatter(
+                    x=selected_row['date'],
+                    y=selected_row['probability_pct'],
+                    mode='markers',
+                    marker=dict(size=15, color='red', symbol='star'),
+                    name='Selected Date',
+                    showlegend=True
+                )
+            
+            fig.update_layout(
+                xaxis_title="Date",
+                yaxis_title="Match Probability (%)",
+                hovermode='x unified',
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Show all results in expandable section
+            with st.expander("📊 View All Results"):
+                # Create display dataframe
+                display_df = best_days_df.copy()
+                display_df['date'] = display_df['day'].apply(lambda x: day_to_date(x, selected_date.year))
+                display_df['date_formatted'] = display_df['date'].apply(lambda x: x.strftime('%Y-%m-%d (%A)'))
+                display_df['probability_pct'] = (display_df['probability'] * 100).round(2)
+                display_df['days_offset'] = display_df['date'].apply(lambda x: (x.date() - selected_date).days)
+                
+                # Select and rename columns for display
+                display_cols = display_df[['date_formatted', 'days_offset', 'probability_pct']].copy()
+                display_cols.columns = ['Date', 'Days from Selected', 'Match Probability (%)']
+                
+                st.dataframe(display_cols, use_container_width=True, hide_index=True)
+                
+                # Download button
+                csv = display_df[['date_formatted', 'day', 'probability', 'days_offset']].to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Download Best Days (CSV)",
+                    data=csv,
+                    file_name=f"best_days_{selected_date.strftime('%Y%m%d')}_lat{lat:.2f}_lon{lon:.2f}.csv",
+                    mime="text/csv"
+                )
+        else:
+            st.warning("No results found for the best days analysis.")
+        
+        st.markdown("---")
+        st.markdown("---")
+        
+        # ===== ORIGINAL PREDICTIONS SECTION =====
         # Main content
         col1, col2 = st.columns([2, 1])
         
