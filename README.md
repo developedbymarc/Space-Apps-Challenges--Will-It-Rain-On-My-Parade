@@ -57,26 +57,15 @@ google-generativeai
 
 ### 4. Set Up Google Gemini API Key (Optional - for AI summaries)
 
-1. Get a free API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+1. Create a folder called `.streamlit`
 
-2. Create .streamlit/secrets.toml in your project root:
-   bash
-   mkdir .streamlit
-   
+2. Create a `secrets.toml` file in the `.streamlit` folder
 
-3. Add your API key to .streamlit/secrets.toml:
-   toml
-   GEMINI_API_KEY = "your-api-key-here"
+2. Add the following API key to .streamlit/secrets.toml:
    
-
-4. Make sure .streamlit/secrets.toml is in your .gitignore:
-   
-   .streamlit/secrets.toml
-   venv/
-   __pycache__/
-   *.pyc
-   .DS_Store
-   
+   ```
+   GEMINI_API_KEY = "GENERATE_AND_ENTER_YOUR_OWN_KEY"
+   ```   
 
 ### 5. Verify Database File
 
