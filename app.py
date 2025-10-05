@@ -484,22 +484,6 @@ def main():
     # Show original and normalized day
     normalized_day = day_of_year - 1 if is_leap_year and day_of_year > 60 else day_of_year
     
-    if is_leap_year and selected_date.month == 2 and selected_date.day == 29:
-        st.sidebar.info(f"Day of year: {day_of_year} → {normalized_day} (Feb 29 → Feb 28)")
-    elif is_leap_year and day_of_year > 60:
-        st.sidebar.info(f"Day of year: {day_of_year} → {normalized_day} (leap year adjusted)")
-    else:
-        st.sidebar.info(f"Day of year: {day_of_year}")
-    
-    # Check if selected date is in historical range
-    is_historical = min_date.date() <= selected_date <= max_date.date()
-    is_future = selected_date > max_date.date()
-    
-    if is_future:
-        st.sidebar.info(f"🔮 Future prediction mode")
-    elif is_historical:
-        st.sidebar.success(f"📊 Can compare with historical data")
-    
     # Weather parameters input
     st.sidebar.markdown("### 🎛️ Preferred Weather Conditions")
 
