@@ -211,7 +211,7 @@ The project effectively integrates a Bayesian Network with historical NASA MERRA
 
 ### Weaknesses:
 
-The model relies solely on historical data, limiting its responsiveness to real-time or rapidly changing weather phenomena. The discretization, while user-friendly, reduces granularity, potentially oversimplifying subtle variations. Bayesian Network inference can fail when a location or day combination isn’t present in the training data, leading to gaps in predictions. The AI summary relies on an external API key, which may be unavailable for all users.
+The model relies solely on historical data, limiting its responsiveness to real-time or rapidly changing weather phenomena. The discretization, while user-friendly, reduces granularity, potentially oversimplifying subtle variations. Bayesian Network inference can fail when a location or day combination isn’t present in the training data, leading to gaps in predictions.
 
 ### Limitations:
 
